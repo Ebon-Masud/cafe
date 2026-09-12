@@ -48,4 +48,3 @@ def validate_sql(filename):
 
 if __name__ == '__main__':
     validate_sql('schema.sql')
-    validate_sql('ravenhill_database.sql')

@@ -765,9 +765,5 @@ SET FOREIGN_KEY_CHECKS = 1;
         f.write(sql)
     print("Regenerated schema.sql successfully!")
 
-    with open('ravenhill_database.sql', 'w', encoding='utf-8') as f:
-        f.write(sql)
-    print("Regenerated ravenhill_database.sql successfully!")
-
 if __name__ == '__main__':
     generate_complete_sql()

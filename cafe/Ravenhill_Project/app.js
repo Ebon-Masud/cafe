@@ -899,7 +899,8 @@ const AppState = {
   activeRole: 'cashier', // 'admin', 'cashier', 'barista'
   activeModule: 'pos',
   isAuthenticated: true,
-  activeCategory: '1',
+  activeCategory: 'all',
+  posCatMenuCollapsed: false,
   searchQuery: '',
 
   // Active Sale Cart
@@ -980,8 +981,8 @@ function loadLocalDB() {
         };
       }
     }
-    if (!DB.menuCategories.some(c => String(c.id) === String(AppState.activeCategory)) && DB.menuCategories.length > 0) {
-      AppState.activeCategory = DB.menuCategories[0].id;
+    if (AppState.activeCategory !== 'all' && !DB.menuCategories.some(c => String(c.id) === String(AppState.activeCategory)) && DB.menuCategories.length > 0) {
+      AppState.activeCategory = 'all';
     }
   } catch (e) {
     console.warn('[LocalStorage] Load failed:', e);
@@ -1253,6 +1254,10 @@ function applyRoleToUI(role) {
     if (nameEl) nameEl.textContent = 'Sophia Reed';
     if (badgeEl) badgeEl.textContent = 'Loyalty Customer';
     if (avatarEl) avatarEl.textContent = 'SR';
+    if (window.CustomerStore && CustomerStore.customers) {
+      const sophia = CustomerStore.customers.find(c => String(c.id) === '7' || c.name.toLowerCase().includes('sophia'));
+      if (sophia) AppState.activeCustomerProfile = sophia;
+    }
   } else {
     if (nameEl) nameEl.textContent = 'Sarah Lin';
     if (badgeEl) badgeEl.textContent = 'Lead Cashier';
@@ -1615,8 +1620,8 @@ async function syncBackendData() {
     }
 
     // Ensure active category is valid
-    if (!DB.menuCategories.some(c => String(c.id) === String(AppState.activeCategory)) && DB.menuCategories.length > 0) {
-      AppState.activeCategory = DB.menuCategories[0].id;
+    if (AppState.activeCategory !== 'all' && !DB.menuCategories.some(c => String(c.id) === String(AppState.activeCategory)) && DB.menuCategories.length > 0) {
+      AppState.activeCategory = 'all';
     }
 
     // 3. Process Inventory (handles { count, items } or array)
@@ -2382,37 +2387,164 @@ function renderPOSView(container) {
   const posLayout = document.createElement('div');
   posLayout.className = 'pos-main-panel';
 
-  // Categories Bar
-  const catBar = document.createElement('div');
-  catBar.className = 'pos-categories-bar';
-
-  DB.menuCategories.forEach(cat => {
-    const catBtn = document.createElement('button');
-    catBtn.className = `cat-btn ${AppState.activeCategory === cat.id ? 'active' : ''}`;
-    catBtn.innerHTML = `<i class="${cat.icon}"></i> <span>${cat.name}</span>`;
-    catBtn.addEventListener('click', () => {
-      AppState.activeCategory = cat.id;
-      renderPOSView(container);
-    });
-    catBar.appendChild(catBtn);
-  });
-
-  posLayout.appendChild(catBar);
-
-  // Touch Items Grid
-  const itemsGrid = document.createElement('div');
-  itemsGrid.className = 'pos-items-grid';
-
-  if (!DB.menuCategories.some(c => String(c.id) === String(AppState.activeCategory)) && DB.menuCategories.length > 0) {
-    AppState.activeCategory = DB.menuCategories[0].id;
+  // Ensure active category is valid
+  if (AppState.activeCategory !== 'all' && !DB.menuCategories.some(c => String(c.id) === String(AppState.activeCategory)) && DB.menuCategories.length > 0) {
+    AppState.activeCategory = 'all';
   }
-  let filteredItems = DB.menuItems.filter(item => String(item.catId) === String(AppState.activeCategory) || String(item.category_id) === String(AppState.activeCategory));
+
+  // Active Category Meta
+  const activeCat = DB.menuCategories.find(c => String(c.id) === String(AppState.activeCategory));
+  const activeIcon = AppState.activeCategory === 'all' 
+    ? 'ri-apps-2-line' 
+    : (activeCat?.icon || getCategoryIcon(activeCat?.name));
+  const activeName = AppState.activeCategory === 'all' 
+    ? 'All Items' 
+    : (activeCat?.name || 'All Items');
+
+  // Sort categories alphabetically as in reference UI
+  const sortedCategories = [...DB.menuCategories].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  // Compute Filtered Items
+  let filteredItems = (AppState.activeCategory === 'all')
+    ? DB.menuItems
+    : DB.menuItems.filter(item => String(item.catId) === String(AppState.activeCategory) || String(item.category_id) === String(AppState.activeCategory));
+
   if (AppState.searchQuery) {
-    filteredItems = DB.menuItems.filter(item => 
-      item.name.toLowerCase().includes(AppState.searchQuery) ||
-      item.desc.toLowerCase().includes(AppState.searchQuery)
+    const q = AppState.searchQuery.toLowerCase().trim();
+    filteredItems = filteredItems.filter(item => 
+      (item.name && item.name.toLowerCase().includes(q)) ||
+      (item.desc && item.desc.toLowerCase().includes(q))
     );
   }
+
+  // 1. Collapsible Category Drawer Container
+  const isCollapsed = !!AppState.posCatMenuCollapsed;
+  const catCollapseWrapper = document.createElement('div');
+  catCollapseWrapper.className = `pos-category-collapse-wrapper ${isCollapsed ? 'collapsed' : ''}`;
+  catCollapseWrapper.id = 'pos-category-collapse-wrapper';
+
+  const catNavGrid = document.createElement('div');
+  catNavGrid.className = 'pos-category-nav-grid';
+  catNavGrid.id = 'pos-category-nav-grid';
+
+  // "All" button
+  const allBtn = document.createElement('button');
+  allBtn.type = 'button';
+  allBtn.className = `cat-btn ${AppState.activeCategory === 'all' ? 'active' : ''}`;
+  allBtn.innerHTML = `<i class="ri-apps-2-line"></i> <span>All</span>`;
+  allBtn.addEventListener('click', () => {
+    AppState.activeCategory = 'all';
+    AppState.posCatMenuCollapsed = true; // Auto-collapse on select to maximize product space
+    renderPOSView(container);
+  });
+  catNavGrid.appendChild(allBtn);
+
+  // Individual category buttons (Bakery, Breakfast, Coffee, Cold Coffee, Cold Drinks, Hot Drinks, Juices, Lunch, Pastries, Sandwiches, Sides, Smoothies, Tea, Toasties)
+  sortedCategories.forEach(cat => {
+    const catBtn = document.createElement('button');
+    catBtn.type = 'button';
+    const isCatActive = String(AppState.activeCategory) === String(cat.id);
+    catBtn.className = `cat-btn ${isCatActive ? 'active' : ''}`;
+    catBtn.innerHTML = `<i class="${cat.icon || getCategoryIcon(cat.name)}"></i> <span>${cat.name}</span>`;
+    catBtn.addEventListener('click', () => {
+      AppState.activeCategory = cat.id;
+      AppState.posCatMenuCollapsed = true; // Auto-collapse on select to maximize product space
+      renderPOSView(container);
+    });
+    catNavGrid.appendChild(catBtn);
+  });
+
+  catCollapseWrapper.appendChild(catNavGrid);
+  posLayout.appendChild(catCollapseWrapper);
+
+  // 2. Floating / Sticky Category Quick Bar & Toggle Button
+  const floatingBar = document.createElement('div');
+  floatingBar.className = 'pos-floating-bar';
+  floatingBar.id = 'pos-floating-bar';
+
+  floatingBar.innerHTML = `
+    <button type="button" class="pos-floating-toggle-btn" id="pos-floating-cat-btn" aria-label="Toggle Categories Menu" title="Toggle Categories Menu">
+      <span class="pos-floating-chevron-wrap">
+        <i class="${isCollapsed ? 'ri-arrow-down-s-line' : 'ri-arrow-up-s-line'}" id="pos-cat-chevron-icon"></i>
+      </span>
+      <span class="pos-floating-text" id="pos-cat-toggle-text">${isCollapsed ? 'Show Categories' : 'Hide Categories'}</span>
+      <span class="pos-active-cat-badge">
+        <i class="${activeIcon}"></i>
+        <span>${activeName}</span>
+      </span>
+      <span class="pos-floating-count">${filteredItems.length} items</span>
+    </button>
+  `;
+
+  // Attach toggle button listener
+  const toggleBtn = floatingBar.querySelector('#pos-floating-cat-btn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      AppState.posCatMenuCollapsed = !AppState.posCatMenuCollapsed;
+      const wrapper = document.getElementById('pos-category-collapse-wrapper');
+      const chevron = document.getElementById('pos-cat-chevron-icon');
+      const toggleText = document.getElementById('pos-cat-toggle-text');
+
+      if (AppState.posCatMenuCollapsed) {
+        if (wrapper) wrapper.classList.add('collapsed');
+        if (chevron) chevron.className = 'ri-arrow-down-s-line';
+        if (toggleText) toggleText.textContent = 'Show Categories';
+      } else {
+        if (wrapper) wrapper.classList.remove('collapsed');
+        if (chevron) chevron.className = 'ri-arrow-up-s-line';
+        if (toggleText) toggleText.textContent = 'Hide Categories';
+      }
+    });
+  }
+
+  posLayout.appendChild(floatingBar);
+
+  // 3. Touch Items Grid
+  const itemsGrid = document.createElement('div');
+  itemsGrid.className = 'pos-items-grid';
+  itemsGrid.id = 'pos-items-grid';
+
+  // Smart Auto-Hide on Scroll Listener
+  let lastScrollTop = 0;
+  let scrollTicking = false;
+
+  itemsGrid.addEventListener('scroll', () => {
+    if (!scrollTicking) {
+      window.requestAnimationFrame(() => {
+        const currentScroll = itemsGrid.scrollTop;
+        const scrollDelta = currentScroll - lastScrollTop;
+
+        // When scrolling down > 20px and beyond top area: collapse category menu
+        if (scrollDelta > 15 && currentScroll > 35) {
+          if (!AppState.posCatMenuCollapsed) {
+            AppState.posCatMenuCollapsed = true;
+            const wrapper = document.getElementById('pos-category-collapse-wrapper');
+            const chevron = document.getElementById('pos-cat-chevron-icon');
+            const toggleText = document.getElementById('pos-cat-toggle-text');
+            if (wrapper) wrapper.classList.add('collapsed');
+            if (chevron) chevron.className = 'ri-arrow-down-s-line';
+            if (toggleText) toggleText.textContent = 'Show Categories';
+          }
+        } 
+        // When scrolling back up towards top: auto-reappear
+        else if (scrollDelta < -20 || currentScroll <= 20) {
+          if (AppState.posCatMenuCollapsed && currentScroll <= 25) {
+            AppState.posCatMenuCollapsed = false;
+            const wrapper = document.getElementById('pos-category-collapse-wrapper');
+            const chevron = document.getElementById('pos-cat-chevron-icon');
+            const toggleText = document.getElementById('pos-cat-toggle-text');
+            if (wrapper) wrapper.classList.remove('collapsed');
+            if (chevron) chevron.className = 'ri-arrow-up-s-line';
+            if (toggleText) toggleText.textContent = 'Hide Categories';
+          }
+        }
+
+        lastScrollTop = Math.max(0, currentScroll);
+        scrollTicking = false;
+      });
+      scrollTicking = true;
+    }
+  }, { passive: true });
 
   if (filteredItems.length === 0) {
     itemsGrid.innerHTML = `
@@ -2442,11 +2574,11 @@ function renderPOSView(container) {
         </div>
         <div class="menu-card-info">
           <h4>${item.name}</h4>
-          <p>${item.desc}</p>
+          <p>${item.desc || 'Freshly made with artisanal ingredients'}</p>
         </div>
         <div class="menu-card-bottom">
           <span class="menu-card-price">${priceHtml}</span>
-          <button class="add-item-btn"><i class="ri-add-line"></i></button>
+          <button class="add-item-btn" aria-label="Add ${item.name} to sale" title="Add to Order"><i class="ri-add-line"></i></button>
         </div>
       `;
 
@@ -2454,7 +2586,7 @@ function renderPOSView(container) {
         if (item.hasModifiers) {
           openCustomiserModal(item);
         } else {
-          // Non-modifier items (bakery, retail beans) bypass customiser with neutral defaults
+          // Non-modifier items bypass customiser with neutral defaults
           addItemToCart(item, [], '', 1);
           window.openCartDrawer();
           showToast(`Added 1x ${item.name} to cart!`, 'success');
@@ -2589,7 +2721,10 @@ function setupCartDrawerEvents() {
   // Attach Customer
   const attachCustBtn = document.getElementById('attach-customer-btn');
   if (attachCustBtn) {
-    attachCustBtn.addEventListener('click', openCustomerModal);
+    attachCustBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openCustomerProfileDrawer();
+    });
   }
 
   // Checkout Button
@@ -2892,11 +3027,18 @@ function renderCartUI() {
 
   // Customer Tag UI
   const custInfo = document.getElementById('cart-customer-info');
+  const attachBtn = document.getElementById('attach-customer-btn');
   if (custInfo) {
     if (AppState.cart.customer) {
       custInfo.innerHTML = `<i class="ri-vip-crown-fill" style="color:var(--color-accent-gold);"></i> <span>${AppState.cart.customer.name} (${AppState.cart.customer.tier})</span>`;
+      if (attachBtn) {
+        attachBtn.innerHTML = `<i class="ri-user-star-line"></i> Profile`;
+      }
     } else {
       custInfo.innerHTML = `<i class="ri-user-3-line"></i> <span>Walk-in Customer</span>`;
+      if (attachBtn) {
+        attachBtn.innerHTML = `<i class="ri-user-add-line"></i> Customer`;
+      }
     }
   }
 }
@@ -4413,34 +4555,2394 @@ function completePaymentProcess() {
   }
 }
 
-// Customer Modal
-function openCustomerModal() {
-  const modal = document.getElementById('customer-modal');
-  const list = document.getElementById('customer-select-list');
-  list.innerHTML = DB.customers.map(c => `
-    <div class="option-card" style="display:flex; justify-content:space-between; align-items:center; text-align:left; margin-bottom:8px; cursor:pointer;" onclick="selectLoyaltyCustomer('${c.id}')">
-      <div>
-        <strong style="display:block;">${c.name} <span class="badge badge-gold">${c.tier}</span></strong>
-        <span style="font-size:11px; color:var(--color-cream-muted);">${c.mobile} • ${c.email}</span>
-      </div>
-      <strong style="color:var(--color-accent-gold);">${c.points} Pts</strong>
-    </div>
-  `).join('');
 
-  document.getElementById('close-customer-modal-btn').onclick = () => modal.classList.add('hidden');
-  document.getElementById('detach-cust-btn').onclick = () => {
-    AppState.cart.customer = null;
-    renderCartUI();
-    modal.classList.add('hidden');
+// ==========================================================================
+// 5. ISOLATED CUSTOMER MANAGEMENT, PROFILE, LOYALTY & ORDER HISTORY ENGINE
+// ==========================================================================
+
+// Configurable Loyalty Tiers (Admin-customisable)
+window.LoyaltyConfig = {
+  tiers: [
+    {
+      key: 'bronze',
+      name: 'Bronze Member',
+      min_points: 0,
+      max_points: 499,
+      points_to_next: 500,
+      next_tier: 'Silver',
+      multiplier: '1.0×',
+      discount_pct: 0,
+      badge_class: 'tier-bronze',
+      icon: 'ri-medal-line',
+      color: '#D97706',
+      benefits: [
+        'Earn 1 point per $1 spent',
+        'Birthday beverage treat voucher',
+        'Standard mobile ordering access'
+      ]
+    },
+    {
+      key: 'silver',
+      name: 'Silver Member',
+      min_points: 500,
+      max_points: 999,
+      points_to_next: 1000,
+      next_tier: 'Gold',
+      multiplier: '1.25×',
+      discount_pct: 5,
+      badge_class: 'tier-silver',
+      icon: 'ri-vip-crown-2-line',
+      color: '#CBD5E1',
+      benefits: [
+        'Earn 1.25 points per $1 spent',
+        '5% discount on all barista beverages',
+        'Complimentary alternative milk / syrup upgrades',
+        'Priority counter pickup'
+      ]
+    },
+    {
+      key: 'gold',
+      name: 'Gold VIP',
+      min_points: 1000,
+      max_points: 1999,
+      points_to_next: 2000,
+      next_tier: 'Platinum',
+      multiplier: '1.5×',
+      discount_pct: 10,
+      badge_class: 'tier-gold',
+      icon: 'ri-vip-crown-fill',
+      color: '#F59E0B',
+      benefits: [
+        'Earn 1.5 points per $1 spent',
+        '10% discount on entire order',
+        'Double Points Weekends promotion',
+        '1× Monthly complimentary artisan pastry',
+        'Early access to seasonal single origin beans'
+      ]
+    },
+    {
+      key: 'platinum',
+      name: 'Platinum Elite',
+      min_points: 2000,
+      max_points: 99999,
+      points_to_next: null,
+      next_tier: null,
+      multiplier: '2.0×',
+      discount_pct: 15,
+      badge_class: 'tier-platinum',
+      icon: 'ri-vip-diamond-fill',
+      color: '#A855F7',
+      benefits: [
+        'Earn 2.0 points per $1 spent (2× multiplier)',
+        '15% VIP discount on all orders',
+        'Complimentary 250g house roast beans on anniversary',
+        'Private cupping & barista masterclass invitations',
+        'Direct table ordering concierge'
+      ]
+    }
+  ],
+  rewards: [
+    { id: 'coffee', name: 'Free Regular Coffee', cost: 100, icon: 'ri-cup-line', desc: 'Any regular flat white, latte, or batch brew' },
+    { id: 'pastry', name: 'Artisan Pastry Voucher', cost: 150, icon: 'ri-bread-line', desc: 'Fresh butter or almond croissant, danish, or muffin' },
+    { id: 'voucher10', name: '$10 Café Credit', cost: 250, icon: 'ri-money-dollar-circle-line', desc: 'Redeem $10 off your entire food & drinks bill' },
+    { id: 'breakfast', name: 'Complimentary Breakfast', cost: 350, icon: 'ri-restaurant-line', desc: 'Any breakfast roll, avocado toast, or eggs benedict' }
+  ],
+  activePromotions: [
+    {
+      id: 'double_weekend',
+      title: 'Double Points Weekend',
+      eligible_tiers: ['Gold VIP', 'Platinum Elite'],
+      description: 'Gold & Platinum members receive double points on all specialty espresso drinks this weekend.',
+      valid_from: '12 Sep 2026',
+      valid_until: '14 Sep 2026',
+      status: 'Active Now'
+    },
+    {
+      id: 'spring_pastry',
+      title: 'Spring Pastry Perk',
+      eligible_tiers: ['Silver Member', 'Gold VIP', 'Platinum Elite'],
+      description: 'Add a fresh almond croissant for just 100 points (normally 150 points).',
+      valid_from: '01 Sep 2026',
+      valid_until: '30 Sep 2026',
+      status: 'Active Now'
+    }
+  ]
+};
+
+// Isolated Customer Data Store
+window.CustomerStore = {
+  customers: [
+    {
+      id: '1',
+      customer_id: 1,
+      name: 'David Kim',
+      first_name: 'David',
+      last_name: 'Kim',
+      mobile: '0412 889 201',
+      email: 'david.kim@gmail.com',
+      dob: '1992-10-14',
+      address: '42 Commercial Rd, Prahran VIC 3181',
+      photo: null,
+      member_since: '12 Oct 2025',
+      tier: 'Gold VIP',
+      points: 820,
+      points_expiry: '31 Dec 2026',
+      total_orders: 26,
+      visits: 26,
+      total_spent: 498.40,
+      last_visit: '12 Sep 2026, 10:35 AM',
+      tags: ['Regular', 'VIP', 'Prefers Oat Milk', 'Extra Hot', 'Morning Routine'],
+      notes: 'Prefers extra hot flat white with oat milk and 1 raw sugar. Always sits at Table 4 when available.'
+    },
+    {
+      id: '2',
+      customer_id: 2,
+      name: 'Alex Mercer',
+      first_name: 'Alex',
+      last_name: 'Mercer',
+      mobile: '0400 998 123',
+      email: 'alex.mercer@outlook.com',
+      dob: '1988-06-20',
+      address: '15 Chapel St, South Yarra VIC 3141',
+      photo: null,
+      member_since: '04 Nov 2025',
+      tier: 'Silver Member',
+      points: 640,
+      points_expiry: '31 Dec 2026',
+      total_orders: 19,
+      visits: 19,
+      total_spent: 312.50,
+      last_visit: '11 Sep 2026, 02:15 PM',
+      tags: ['Usually Takeaway', 'Almond Milk', 'Afternoon Coffee'],
+      notes: 'Likes quick takeaway iced long black with splash of almond milk. Never add sweetener.'
+    },
+    {
+      id: '3',
+      customer_id: 3,
+      name: 'Chloe Lin',
+      first_name: 'Chloe',
+      last_name: 'Lin',
+      mobile: '0488 442 109',
+      email: 'chloe.lin@techcorp.au',
+      dob: '1995-03-08',
+      address: '88 St Kilda Rd, Melbourne VIC 3004',
+      photo: null,
+      member_since: '09 Jan 2026',
+      tier: 'Bronze Member',
+      points: 290,
+      points_expiry: '31 Dec 2026',
+      total_orders: 11,
+      visits: 11,
+      total_spent: 174.00,
+      last_visit: '09 Sep 2026, 11:20 AM',
+      tags: ['Gluten Free', 'Matcha Lover', 'Lunch Regular'],
+      notes: 'Has mild gluten sensitivity. Double check toast is gluten-free artisan bread.'
+    },
+    {
+      id: '4',
+      customer_id: 4,
+      name: 'Marcus Vance',
+      first_name: 'Marcus',
+      last_name: 'Vance',
+      mobile: '0411 223 344',
+      email: 'marcus.vance@melbourne.edu.au',
+      dob: '1980-12-05',
+      address: '104 High St, Armadale VIC 3143',
+      photo: null,
+      member_since: '19 Aug 2025',
+      tier: 'Platinum Elite',
+      points: 2340,
+      points_expiry: '30 Jun 2027',
+      total_orders: 58,
+      visits: 58,
+      total_spent: 1180.00,
+      last_visit: '10 Sep 2026, 08:45 AM',
+      tags: ['Platinum VIP', 'Single Origin', 'Weekend Brunch', 'Bespoke Roasts'],
+      notes: 'University professor. Connoisseur of Ethiopian natural process beans. Enjoys pour-over V60.'
+    },
+    {
+      id: '5',
+      customer_id: 5,
+      name: 'Elena Rostova',
+      first_name: 'Elena',
+      last_name: 'Rostova',
+      mobile: '0422 334 455',
+      email: 'elena.r@designhub.com',
+      dob: '1991-07-19',
+      address: '12 Grattan St, Carlton VIC 3053',
+      photo: null,
+      member_since: '01 Feb 2026',
+      tier: 'Silver Member',
+      points: 710,
+      points_expiry: '31 Dec 2026',
+      total_orders: 22,
+      visits: 22,
+      total_spent: 395.20,
+      last_visit: '08 Sep 2026, 03:30 PM',
+      tags: ['Architect Regular', 'Soy Flat White', 'Pastry Fan'],
+      notes: 'Loves almond croissants warmed up. Soy milk flat white with cinnamon dust.'
+    },
+    {
+      id: '7',
+      customer_id: 7,
+      name: 'Sophia Reed',
+      first_name: 'Sophia',
+      last_name: 'Reed',
+      mobile: '0411 223 344',
+      email: 'customer@ravenhill.au',
+      dob: '1996-05-18',
+      address: '28 Toorak Rd, South Yarra VIC 3141',
+      photo: null,
+      member_since: '29 Aug 2026',
+      tier: 'Gold VIP',
+      points: 250,
+      points_expiry: '31 Dec 2026',
+      total_orders: 11,
+      visits: 11,
+      total_spent: 198.50,
+      last_visit: '12 Sep 2026, 09:15 AM',
+      tags: ['Storefront Regular', 'Oat Milk Lover', 'Almond Croissant', 'Morning Orders'],
+      notes: 'Loves our Melbourne specialty filter roasts and iced oat latte. Prefers order ready for morning counter pickup.'
+    }
+  ],
+
+  // Isolated Order Records strictly keyed by customer_id
+  ordersByCustomer: {
+    '1': [
+      {
+        id: '9051',
+        date: '12 Sep 2026',
+        time: '10:35 AM',
+        date_iso: '2026-09-12T10:35:00',
+        channel: 'Dine In (Table 04)',
+        total: 18.50,
+        payment_method: 'EFTPOS',
+        receipt_id: 'R9051',
+        emailed_to: 'david.kim@gmail.com',
+        items: [
+          { name: 'Cappuccino', quantity: 1, price: 5.20, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }, { group: 'Cup Size', name: 'Large (12oz)', price: 0.80 }] },
+          { name: 'Ham, Cheese & Tomato Toastie', quantity: 1, price: 12.50, customisations: [{ group: 'Food Add-Ons & Extras', name: 'Extra Melted Vintage Cheddar', price: 2.00 }] }
+        ]
+      },
+      {
+        id: '8984',
+        date: '08 Sep 2026',
+        time: '08:40 AM',
+        date_iso: '2026-09-08T08:40:00',
+        channel: 'Takeaway',
+        total: 14.50,
+        payment_method: 'Apple Pay (Mastercard)',
+        receipt_id: 'R8984',
+        emailed_to: 'david.kim@gmail.com',
+        items: [
+          { name: 'Flat White', quantity: 1, price: 5.20, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+          { name: 'Bacon & Egg Roll', quantity: 1, price: 12.00, customisations: [{ group: 'Sauces & Condiments', name: 'Smoky Tomato Relish', price: 1.00 }] }
+        ]
+      },
+      {
+        id: '8910',
+        date: '03 Sep 2026',
+        time: '11:15 AM',
+        date_iso: '2026-09-03T11:15:00',
+        channel: 'Dine In (Table 04)',
+        total: 21.00,
+        payment_method: 'Visa ****4242',
+        receipt_id: 'R8910',
+        emailed_to: 'david.kim@gmail.com',
+        items: [
+          { name: 'Chicken Caesar Salad', quantity: 1, price: 21.00, customisations: [] },
+          { name: 'Iced Latte', quantity: 1, price: 6.80, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] }
+        ]
+      },
+      {
+        id: '8832',
+        date: '28 Aug 2026',
+        time: '09:05 AM',
+        date_iso: '2026-08-28T09:05:00',
+        channel: 'Takeaway',
+        total: 12.00,
+        payment_method: 'Cash',
+        receipt_id: 'R8832',
+        emailed_to: 'david.kim@gmail.com',
+        items: [
+          { name: 'Cappuccino', quantity: 1, price: 5.20, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+          { name: 'Almond Croissant', quantity: 1, price: 8.00, customisations: [] }
+        ]
+      }
+    ],
+
+    '2': [
+      {
+        id: '9045',
+        date: '11 Sep 2026',
+        time: '02:15 PM',
+        date_iso: '2026-09-11T14:15:00',
+        channel: 'Takeaway',
+        total: 13.00,
+        payment_method: 'Mastercard ****8819',
+        receipt_id: 'R9045',
+        emailed_to: 'alex.mercer@outlook.com',
+        items: [
+          { name: 'Iced Long Black', quantity: 1, price: 6.20, customisations: [{ group: 'Milk Choice', name: 'Almond Milk', price: 0.80 }] },
+          { name: 'Banana Bread', quantity: 1, price: 7.00, customisations: [] }
+        ]
+      },
+      {
+        id: '8960',
+        date: '06 Sep 2026',
+        time: '09:30 AM',
+        date_iso: '2026-09-06T09:30:00',
+        channel: 'Takeaway',
+        total: 14.50,
+        payment_method: 'EFTPOS',
+        receipt_id: 'R8960',
+        emailed_to: 'alex.mercer@outlook.com',
+        items: [
+          { name: 'Long Black', quantity: 1, price: 4.80, customisations: [{ group: 'Espresso Strength', name: 'Extra Espresso Shot (+1)', price: 0.80 }] },
+          { name: 'Avocado Toast', quantity: 1, price: 18.50, customisations: [] }
+        ]
+      }
+    ],
+
+    '3': [
+      {
+        id: '9022',
+        date: '09 Sep 2026',
+        time: '11:20 AM',
+        date_iso: '2026-09-09T11:20:00',
+        channel: 'Dine In (Table 01)',
+        total: 24.70,
+        payment_method: 'PayPal',
+        receipt_id: 'R9022',
+        emailed_to: 'chloe.lin@techcorp.au',
+        items: [
+          { name: 'Matcha Latte', quantity: 1, price: 6.20, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+          { name: 'Sourdough Toast', quantity: 1, price: 6.50, customisations: [{ group: 'Bread & Toast Selection', name: 'Gluten-Free Bread / Toast', price: 1.50 }] },
+          { name: 'Seasonal Salad', quantity: 1, price: 18.00, customisations: [] }
+        ]
+      }
+    ],
+
+    '4': [
+      {
+        id: '9039',
+        date: '10 Sep 2026',
+        time: '08:45 AM',
+        date_iso: '2026-09-10T08:45:00',
+        channel: 'Dine In (Table 08)',
+        total: 31.50,
+        payment_method: 'Amex ****1002',
+        receipt_id: 'R9039',
+        emailed_to: 'marcus.vance@melbourne.edu.au',
+        items: [
+          { name: 'Single Origin Ethiopian', quantity: 1, price: 5.00, customisations: [{ group: 'Cup Size', name: 'Large (12oz)', price: 0.80 }] },
+          { name: 'Eggs Benedict', quantity: 1, price: 21.00, customisations: [{ group: 'Food Add-Ons & Extras', name: 'Smoked Tasmanian Salmon', price: 6.00 }] }
+        ]
+      }
+    ],
+
+    '5': [
+      {
+        id: '9015',
+        date: '08 Sep 2026',
+        time: '03:30 PM',
+        date_iso: '2026-09-08T15:30:00',
+        channel: 'Takeaway',
+        total: 13.90,
+        payment_method: 'Apple Pay (Visa)',
+        receipt_id: 'R9015',
+        emailed_to: 'elena.r@designhub.com',
+        items: [
+          { name: 'Flat White', quantity: 1, price: 5.20, customisations: [{ group: 'Milk Choice', name: 'Soy Milk (Bonsoy)', price: 0.70 }, { group: 'Temperature & Sweetener', name: 'Dust with Cinnamon', price: 0.00 }] },
+          { name: 'Almond Croissant', quantity: 1, price: 8.00, customisations: [] }
+        ]
+      }
+    ],
+    '7': [
+      {
+        id: '9053',
+        date: '12 Sep 2026',
+        time: '09:15 AM',
+        date_iso: '2026-09-12T09:15:00',
+        channel: 'Storefront (Takeaway)',
+        total: 13.80,
+        payment_method: 'Apple Pay (Mastercard)',
+        receipt_id: 'R9053',
+        emailed_to: 'customer@ravenhill.au',
+        items: [
+          { name: 'Iced Latte', quantity: 1, price: 6.80, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+          { name: 'Almond Croissant', quantity: 1, price: 7.00, customisations: [{ group: 'Preparation', name: 'Warmed Up', price: 0.00 }] }
+        ]
+      },
+      {
+        id: '8995',
+        date: '09 Sep 2026',
+        time: '08:50 AM',
+        date_iso: '2026-09-09T08:50:00',
+        channel: 'Storefront (Takeaway)',
+        total: 16.20,
+        payment_method: 'Visa ****1122',
+        receipt_id: 'R8995',
+        emailed_to: 'customer@ravenhill.au',
+        items: [
+          { name: 'Flat White', quantity: 1, price: 5.20, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+          { name: 'Avocado Tartine', quantity: 1, price: 11.00, customisations: [] }
+        ]
+      },
+      {
+        id: '8940',
+        date: '04 Sep 2026',
+        time: '10:05 AM',
+        date_iso: '2026-09-04T10:05:00',
+        channel: 'Dine In (Table 02)',
+        total: 22.50,
+        payment_method: 'EFTPOS',
+        receipt_id: 'R8940',
+        emailed_to: 'customer@ravenhill.au',
+        items: [
+          { name: 'Cappuccino', quantity: 1, price: 5.20, customisations: [] },
+          { name: 'Eggs Benedict Brioche', quantity: 1, price: 17.30, customisations: [] }
+        ]
+      }
+    ]
+  },
+
+  // Isolated Payment Receipts strictly keyed by customer_id
+  receiptsByCustomer: {
+    '1': [
+      { receipt_id: 'R9051', order_id: '9051', date: '12 Sep 2026, 10:35 AM', method: 'EFTPOS (Visa ****4242)', total: 18.50, status: 'Settled', emailed_to: 'david.kim@gmail.com' },
+      { receipt_id: 'R8984', order_id: '8984', date: '08 Sep 2026, 08:40 AM', method: 'Apple Pay (Mastercard ****1104)', total: 14.50, status: 'Settled', emailed_to: 'david.kim@gmail.com' },
+      { receipt_id: 'R8910', order_id: '8910', date: '03 Sep 2026, 11:15 AM', method: 'Visa ****4242', total: 21.00, status: 'Settled', emailed_to: 'david.kim@gmail.com' },
+      { receipt_id: 'R8832', order_id: '8832', date: '28 Aug 2026, 09:05 AM', method: 'Cash (AUD)', total: 12.00, status: 'Settled', emailed_to: 'david.kim@gmail.com' }
+    ],
+    '2': [
+      { receipt_id: 'R9045', order_id: '9045', date: '11 Sep 2026, 02:15 PM', method: 'Mastercard ****8819', total: 13.00, status: 'Settled', emailed_to: 'alex.mercer@outlook.com' },
+      { receipt_id: 'R8960', order_id: '8960', date: '06 Sep 2026, 09:30 AM', method: 'EFTPOS', total: 14.50, status: 'Settled', emailed_to: 'alex.mercer@outlook.com' }
+    ],
+    '3': [
+      { receipt_id: 'R9022', order_id: '9022', date: '09 Sep 2026, 11:20 AM', method: 'PayPal (#PP-88219)', total: 24.70, status: 'Settled', emailed_to: 'chloe.lin@techcorp.au' }
+    ],
+    '4': [
+      { receipt_id: 'R9039', order_id: '9039', date: '10 Sep 2026, 08:45 AM', method: 'Amex ****1002', total: 31.50, status: 'Settled', emailed_to: 'marcus.vance@melbourne.edu.au' }
+    ],
+    '5': [
+      { receipt_id: 'R9015', order_id: '9015', date: '08 Sep 2026, 03:30 PM', method: 'Apple Pay (Visa ****9921)', total: 13.90, status: 'Settled', emailed_to: 'elena.r@designhub.com' }
+    ],
+    '7': [
+      { receipt_id: 'R9053', order_id: '9053', date: '12 Sep 2026, 09:15 AM', method: 'Apple Pay (Mastercard)', total: 13.80, status: 'Settled', emailed_to: 'customer@ravenhill.au' },
+      { receipt_id: 'R8995', order_id: '8995', date: '09 Sep 2026, 08:50 AM', method: 'Visa ****1122', total: 16.20, status: 'Settled', emailed_to: 'customer@ravenhill.au' },
+      { receipt_id: 'R8940', order_id: '8940', date: '04 Sep 2026, 10:05 AM', method: 'EFTPOS', total: 22.50, status: 'Settled', emailed_to: 'customer@ravenhill.au' }
+    ]
+  },
+
+  // Isolated Loyalty Ledger entries strictly keyed by customer_id
+  loyaltyByCustomer: {
+    '1': [
+      { type: 'earned', points: 18, desc: 'Earned on Order #9051 (Gold 1.5×)', date: '12 Sep 2026, 10:35 AM' },
+      { type: 'redeemed', points: -150, desc: 'Redeemed: Artisan Pastry Voucher', date: '10 Sep 2026, 09:12 AM' },
+      { type: 'earned', points: 50, desc: 'Double Points Weekend Bonus (Order #8984)', date: '08 Sep 2026, 08:40 AM' },
+      { type: 'earned', points: 32, desc: 'Earned on Order #8910', date: '03 Sep 2026, 11:15 AM' },
+      { type: 'redeemed', points: -250, desc: 'Redeemed: $10 Café Credit', date: '29 Aug 2026, 12:00 PM' },
+      { type: 'earned', points: 100, desc: 'VIP Milestone Bonus: Reached Gold Level', date: '15 Aug 2026, 10:00 AM' }
+    ],
+    '2': [
+      { type: 'earned', points: 16, desc: 'Earned on Order #9045 (Silver 1.25×)', date: '11 Sep 2026, 02:15 PM' },
+      { type: 'earned', points: 18, desc: 'Earned on Order #8960', date: '06 Sep 2026, 09:30 AM' },
+      { type: 'redeemed', points: -100, desc: 'Redeemed: Free Regular Coffee', date: '28 Aug 2026, 08:15 AM' }
+    ],
+    '3': [
+      { type: 'earned', points: 25, desc: 'Earned on Order #9022 (Bronze 1.0×)', date: '09 Sep 2026, 11:20 AM' },
+      { type: 'earned', points: 50, desc: 'Welcome Loyalty Sign-Up Bonus', date: '09 Jan 2026, 09:40 AM' }
+    ],
+    '4': [
+      { type: 'earned', points: 63, desc: 'Earned on Order #9039 (Platinum 2.0×)', date: '10 Sep 2026, 08:45 AM' },
+      { type: 'redeemed', points: -350, desc: 'Redeemed: Complimentary Breakfast', date: '01 Sep 2026, 09:00 AM' },
+      { type: 'earned', points: 200, desc: 'Annual Elite Anniversary Gift', date: '19 Aug 2026, 11:20 AM' }
+    ],
+    '5': [
+      { type: 'earned', points: 17, desc: 'Earned on Order #9015 (Silver 1.25×)', date: '08 Sep 2026, 03:30 PM' },
+      { type: 'earned', points: 15, desc: 'Earned on Pastry Purchase', date: '01 Sep 2026, 04:10 PM' }
+    ],
+    '7': [
+      { type: 'earned', points: 14, desc: 'Earned on Order #9053 (Storefront Gold 1.5×)', date: '12 Sep 2026, 09:15 AM' },
+      { type: 'earned', points: 16, desc: 'Earned on Order #8995 (Takeaway)', date: '09 Sep 2026, 08:50 AM' },
+      { type: 'earned', points: 23, desc: 'Earned on Order #8940 (Dine In)', date: '04 Sep 2026, 10:05 AM' },
+      { type: 'earned', points: 200, desc: 'Welcome Loyalty Sign-Up & Gold Milestone Bonus', date: '29 Aug 2026, 02:43 PM' }
+    ]
+  },
+
+  // Isolated Personalised Smart Notifications strictly keyed by customer_id
+  notificationsByCustomer: {
+    '1': [
+      { id: 'n1', icon: '🎉', title: "You're a Gold Member!", desc: 'Enjoy 10% off all orders and 1.5× bonus points on every purchase.', type: 'tier', date: 'Active' },
+      { id: 'n2', icon: '🎁', title: 'New Reward Available', desc: 'You have 820 points! You can claim an Artisan Pastry or $10 voucher right now.', type: 'reward', date: 'Today' },
+      { id: 'n3', icon: '🔥', title: 'Double Points This Weekend', desc: 'Gold VIPs earn double points on all specialty roasts this Saturday & Sunday.', type: 'promo', date: 'This Weekend' },
+      { id: 'n4', icon: '⭐', title: '180 Points Until Platinum', desc: 'Earn 180 more points to unlock 15% VIP discount and concierge perks.', type: 'milestone', date: 'Target' }
+    ],
+    '2': [
+      { id: 'n21', icon: '🎉', title: 'Silver Tier Active', desc: 'Enjoy 5% discount and complimentary milk upgrades on all coffees.', type: 'tier', date: 'Active' },
+      { id: 'n22', icon: '🎁', title: 'Claim Free Coffee', desc: 'You have enough points to claim a free regular coffee.', type: 'reward', date: 'Available' },
+      { id: 'n23', icon: '⭐', title: '360 Points Until Gold', desc: 'Reach 1,000 points to unlock 10% discount and double points perks.', type: 'milestone', date: 'Target' }
+    ],
+    '3': [
+      { id: 'n31', icon: '⭐', title: '210 Points Until Silver', desc: 'Reach 500 points to unlock 5% off drinks and free milk upgrades.', type: 'milestone', date: 'Target' },
+      { id: 'n32', icon: '🎂', title: 'Birthday Coming Soon', desc: 'Add your date of birth in Edit Profile to claim a free drink on your birthday!', type: 'info', date: 'Tip' }
+    ],
+    '4': [
+      { id: 'n41', icon: '👑', title: 'Platinum Elite Status', desc: 'You enjoy 15% VIP discount and 2.0× double points on all orders.', type: 'tier', date: 'Active' },
+      { id: 'n42', icon: '🎁', title: 'Exclusive Masterclass Invitation', desc: 'Join our seasonal Ethiopian bean tasting this Friday evening.', type: 'event', date: 'This Friday' }
+    ],
+    '5': [
+      { id: 'n51', icon: '🥐', title: 'Spring Pastry Perk', desc: 'Add an almond croissant for just 100 points this month.', type: 'promo', date: 'Until Sep 30' }
+    ],
+    '7': [
+      { id: 'n71', icon: '👑', title: 'Gold Member Perks Active', desc: 'Complimentary milk upgrades and 1.5× reward points automatically applied.', type: 'tier', date: 'Active' },
+      { id: 'n72', icon: '🎁', title: '250 Points Balance', desc: 'You have enough points to claim a Free Specialty Coffee or Artisan Croissant today.', type: 'reward', date: 'Ready' }
+    ]
+  },
+
+  // Isolated Favourites & Frequent Items strictly keyed by customer_id
+  favouritesByCustomer: {
+    '1': {
+      frequentItems: [
+        { name: 'Cappuccino', icon: 'ri-cup-line', price: 5.20, count: 22, defaultMods: 'Large, Oat Milk' },
+        { name: 'Ham, Cheese & Tomato Toastie', icon: 'ri-restaurant-line', price: 12.50, count: 14, defaultMods: 'Extra Cheddar' },
+        { name: 'Almond Croissant', icon: 'ri-bread-line', price: 8.00, count: 9, defaultMods: 'Warmed' }
+      ],
+      savedCombos: [
+        {
+          id: 'combo1',
+          name: 'Morning Coffee Combo',
+          desc: 'Large Cappuccino (Oat Milk) + Ham & Cheese Toastie (Extra Cheddar)',
+          price: 18.50,
+          items: [
+            { name: 'Cappuccino', quantity: 1, price: 5.20, customisations: [{ group: 'Cup Size', name: 'Large (12oz)', price: 0.80 }, { group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+            { name: 'Ham & Cheese Toastie', quantity: 1, price: 12.50, customisations: [{ group: 'Food Add-Ons & Extras', name: 'Extra Melted Vintage Cheddar', price: 2.00 }] }
+          ]
+        },
+        {
+          id: 'combo2',
+          name: 'Friday Lunch Treat',
+          desc: 'Chicken Caesar Salad + Iced Latte (Oat Milk)',
+          price: 27.80,
+          items: [
+            { name: 'Chicken Caesar Salad', quantity: 1, price: 21.00, customisations: [] },
+            { name: 'Iced Latte', quantity: 1, price: 6.80, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] }
+          ]
+        }
+      ]
+    },
+    '2': {
+      frequentItems: [
+        { name: 'Iced Long Black', icon: 'ri-cup-line', price: 6.20, count: 18, defaultMods: 'Almond Milk, Extra Ice' },
+        { name: 'Banana Bread', icon: 'ri-bread-line', price: 7.00, count: 11, defaultMods: 'Toasted with Butter' }
+      ],
+      savedCombos: [
+        {
+          id: 'combo21',
+          name: 'Quick Afternoon Pick-Me-Up',
+          desc: 'Iced Long Black + Toasted Banana Bread',
+          price: 13.20,
+          items: [
+            { name: 'Iced Long Black', quantity: 1, price: 6.20, customisations: [{ group: 'Milk Choice', name: 'Almond Milk', price: 0.80 }] },
+            { name: 'Banana Bread', quantity: 1, price: 7.00, customisations: [] }
+          ]
+        }
+      ]
+    },
+    '3': {
+      frequentItems: [
+        { name: 'Matcha Latte', icon: 'ri-cup-line', price: 6.20, count: 9, defaultMods: 'Oat Milk' },
+        { name: 'Seasonal Salad', icon: 'ri-restaurant-line', price: 18.00, count: 6, defaultMods: 'Gluten Free' }
+      ],
+      savedCombos: [
+        {
+          id: 'combo31',
+          name: 'Healthy Matcha Lunch',
+          desc: 'Matcha Latte + Seasonal Salad',
+          price: 24.20,
+          items: [
+            { name: 'Matcha Latte', quantity: 1, price: 6.20, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+            { name: 'Seasonal Salad', quantity: 1, price: 18.00, customisations: [] }
+          ]
+        }
+      ]
+    },
+    '4': {
+      frequentItems: [
+        { name: 'Single Origin Ethiopian', icon: 'ri-cup-line', price: 5.00, count: 42, defaultMods: 'V60 Pour-over' },
+        { name: 'Eggs Benedict', icon: 'ri-restaurant-line', price: 21.00, count: 28, defaultMods: 'With Tasmanian Salmon' }
+      ],
+      savedCombos: [
+        {
+          id: 'combo41',
+          name: 'Prof. Vance Weekend Special',
+          desc: 'V60 Pour-over + Salmon Eggs Benedict',
+          price: 32.00,
+          items: [
+            { name: 'Single Origin Ethiopian', quantity: 1, price: 5.00, customisations: [{ group: 'Cup Size', name: 'Large (12oz)', price: 0.80 }] },
+            { name: 'Eggs Benedict', quantity: 1, price: 21.00, customisations: [{ group: 'Food Add-Ons & Extras', name: 'Smoked Tasmanian Salmon', price: 6.00 }] }
+          ]
+        }
+      ]
+    },
+    '5': {
+      frequentItems: [
+        { name: 'Flat White', icon: 'ri-cup-line', price: 5.20, count: 19, defaultMods: 'Soy Milk, Cinnamon' },
+        { name: 'Almond Croissant', icon: 'ri-bread-line', price: 8.00, count: 16, defaultMods: 'Extra Warm' }
+      ],
+      savedCombos: [
+        {
+          id: 'combo51',
+          name: 'Afternoon Tea Break',
+          desc: 'Soy Flat White + Warmed Almond Croissant',
+          price: 13.90,
+          items: [
+            { name: 'Flat White', quantity: 1, price: 5.20, customisations: [{ group: 'Milk Choice', name: 'Soy Milk (Bonsoy)', price: 0.70 }] },
+            { name: 'Almond Croissant', quantity: 1, price: 8.00, customisations: [] }
+          ]
+        }
+      ]
+    },
+    '7': {
+      frequentItems: [
+        { name: 'Iced Latte', icon: 'ri-cup-line', price: 6.80, count: 7, defaultMods: 'Oat Milk' },
+        { name: 'Almond Croissant', icon: 'ri-bread-line', price: 7.00, count: 5, defaultMods: 'Warmed Up' },
+        { name: 'Flat White', icon: 'ri-cup-line', price: 5.20, count: 4, defaultMods: 'Oat Milk, Extra Hot' }
+      ],
+      savedCombos: [
+        {
+          id: 'combo71',
+          name: 'Sophia\'s Morning Ritual',
+          desc: '1× Iced Latte (Oat Milk) + 1× Warmed Almond Croissant',
+          price: 13.80,
+          items: [
+            { name: 'Iced Latte', quantity: 1, price: 6.80, customisations: [{ group: 'Milk Choice', name: 'Oat Milk', price: 0.80 }] },
+            { name: 'Almond Croissant', quantity: 1, price: 7.00, customisations: [{ group: 'Preparation', name: 'Warmed Up', price: 0.00 }] }
+          ]
+        }
+      ]
+    }
+  }
+};
+
+// Sync DB.customers with CustomerStore
+if (!DB.customers || DB.customers.length === 0) {
+  DB.customers = CustomerStore.customers;
+} else {
+  // Merge DB.customers ensuring all rich metadata fields exist
+  CustomerStore.customers.forEach(sc => {
+    const existing = DB.customers.find(c => String(c.id) === String(sc.id));
+    if (!existing) {
+      DB.customers.push(sc);
+    } else {
+      Object.assign(existing, sc, existing);
+    }
+  });
+}
+
+// Active Tab Tracking State
+AppState.customerProfileActiveTab = 'overview';
+AppState.activeCustomerProfile = CustomerStore.customers[0];
+
+// Helper: Calculate loyalty tier progress and next milestone
+function calculateLoyaltyMilestone(points) {
+  const tiers = LoyaltyConfig.tiers;
+  let currentTier = tiers[0];
+  let nextTier = tiers[1];
+
+  if (points >= tiers[3].min_points) {
+    currentTier = tiers[3];
+    nextTier = null;
+  } else if (points >= tiers[2].min_points) {
+    currentTier = tiers[2];
+    nextTier = tiers[3];
+  } else if (points >= tiers[1].min_points) {
+    currentTier = tiers[1];
+    nextTier = tiers[2];
+  } else {
+    currentTier = tiers[0];
+    nextTier = tiers[1];
+  }
+
+  const min = currentTier.min_points;
+  const max = nextTier ? nextTier.min_points : currentTier.max_points;
+  const needed = nextTier ? Math.max(0, nextTier.min_points - points) : 0;
+  const progressPct = nextTier 
+    ? Math.min(100, Math.max(8, Math.round(((points - min) / (max - min)) * 100))) 
+    : 100;
+
+  return { currentTier, nextTier, needed, progressPct, max };
+}
+
+// Helper: Get Customer Initials
+function getCustomerInitials(customer) {
+  if (!customer) return '??';
+  if (customer.first_name && customer.last_name) {
+    return (customer.first_name[0] + customer.last_name[0]).toUpperCase();
+  }
+  const parts = (customer.name || '').trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  return (customer.name || 'CU').substring(0, 2).toUpperCase();
+}
+
+// ==========================================
+// DRAWER CONTROLLER & TAB NAVIGATION
+// ==========================================
+
+window.handleTopUserBadgeClick = function() {
+  if (AppState.activeRole === 'customer') {
+    const custId = (AppState.currentUser && (AppState.currentUser.customer_id || AppState.currentUser.id)) || '7';
+    openCustomerProfileDrawer(custId);
+    switchCustomerProfileTab('profile');
+  } else {
+    openCustomerProfileDrawer();
+  }
+};
+
+window.openCustomerProfileDrawer = function(customerId) {
+  const drawer = document.getElementById('customer-profile-drawer');
+  const backdrop = document.getElementById('customer-drawer-backdrop');
+  if (!drawer) return;
+
+  let targetCustomer = null;
+  if (customerId) {
+    targetCustomer = CustomerStore.customers.find(c => String(c.id) === String(customerId) || String(c.customer_id) === String(customerId));
+  } else if (AppState.activeRole === 'customer') {
+    const custId = (AppState.currentUser && (AppState.currentUser.customer_id || AppState.currentUser.id)) || '7';
+    targetCustomer = CustomerStore.customers.find(c => String(c.id) === String(custId) || String(c.customer_id) === String(custId)) ||
+                     CustomerStore.customers.find(c => c.name.toLowerCase().includes('sophia')) ||
+                     CustomerStore.customers[0];
+  } else if (AppState.cart.customer) {
+    targetCustomer = CustomerStore.customers.find(c => String(c.id) === String(AppState.cart.customer.id)) || AppState.cart.customer;
+  } else if (AppState.activeCustomerProfile) {
+    targetCustomer = AppState.activeCustomerProfile;
+  } else {
+    targetCustomer = CustomerStore.customers[0];
+  }
+
+  AppState.activeCustomerProfile = targetCustomer;
+  updateDrawerHeader(targetCustomer);
+  renderCustomerProfileTabContent();
+
+  drawer.classList.remove('hidden');
+  void drawer.offsetWidth;
+  drawer.classList.add('open');
+
+  if (backdrop) {
+    backdrop.classList.remove('hidden');
+    backdrop.classList.add('open');
+  }
+
+  setupCustomerSearchEvents();
+};
+
+window.closeCustomerProfileDrawer = function() {
+  const drawer = document.getElementById('customer-profile-drawer');
+  const backdrop = document.getElementById('customer-drawer-backdrop');
+  if (drawer) {
+    drawer.classList.remove('open');
+    setTimeout(() => drawer.classList.add('hidden'), 350);
+  }
+  if (backdrop) {
+    backdrop.classList.remove('open');
+    setTimeout(() => backdrop.classList.add('hidden'), 350);
+  }
+};
+
+window.switchCustomerProfileTab = function(tabName) {
+  AppState.customerProfileActiveTab = tabName;
+
+  // Update tab buttons
+  const tabBtns = document.querySelectorAll('.cp-tab-btn');
+  tabBtns.forEach(btn => {
+    if (btn.getAttribute('data-tab') === tabName) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+
+  renderCustomerProfileTabContent();
+};
+
+function updateDrawerHeader(customer) {
+  const titleEl = document.getElementById('cp-drawer-header-title');
+  const tierBadge = document.getElementById('cp-header-tier-badge');
+  if (!customer) {
+    if (titleEl) titleEl.innerText = 'Customer Profile';
+    if (tierBadge) tierBadge.innerText = 'Search';
+    return;
+  }
+
+  if (titleEl) titleEl.innerText = customer.name;
+  if (tierBadge) {
+    tierBadge.innerText = customer.tier || 'Member';
+    tierBadge.className = `cp-badge ${(customer.tier || '').toLowerCase().includes('gold') ? 'tier-gold' : ''}`;
+  }
+}
+
+// Search Event Setup
+function setupCustomerSearchEvents() {
+  const searchInput = document.getElementById('cp-customer-search-input');
+  const searchDropdown = document.getElementById('cp-search-dropdown');
+  const clearBtn = document.getElementById('cp-clear-search-btn');
+  if (!searchInput || !searchDropdown) return;
+
+  searchInput.oninput = (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) {
+      searchDropdown.classList.remove('open');
+      searchDropdown.classList.add('hidden');
+      if (clearBtn) clearBtn.classList.add('hidden');
+      return;
+    }
+
+    if (clearBtn) clearBtn.classList.remove('hidden');
+
+    const cleanQ = q.replace(/\s+/g, '');
+    const matches = CustomerStore.customers.filter(c => 
+      (c.name && c.name.toLowerCase().includes(q)) ||
+      (c.mobile && c.mobile.replace(/\s+/g, '').includes(cleanQ)) ||
+      (c.email && c.email.toLowerCase().includes(q)) ||
+      (c.id && String(c.id).toLowerCase().includes(q)) ||
+      (c.customer_id && String(c.customer_id).includes(q))
+    );
+
+    if (matches.length === 0) {
+      searchDropdown.innerHTML = `
+        <div class="cp-search-no-match" style="padding:14px; text-align:center; color:var(--color-cream-muted); font-size:12px;">
+          <i class="ri-user-unfollow-line" style="font-size:20px; display:block; margin-bottom:4px;"></i>
+          No customer found matching "<strong>${escapeHtml(q)}</strong>"
+        </div>
+      `;
+    } else {
+      searchDropdown.innerHTML = matches.map(c => {
+        const inits = getCustomerInitials(c);
+        return `
+          <div class="cp-search-item" onclick="selectCustomerFromSearch('${c.id}')">
+            <div class="cp-search-avatar">
+              ${c.photo ? `<img src="${c.photo}" alt="${c.name}">` : `<span>${inits}</span>`}
+            </div>
+            <div class="cp-search-info">
+              <div class="cp-search-name">${c.name}</div>
+              <div class="cp-search-meta">
+                <span><i class="ri-phone-line"></i> ${c.mobile || 'No phone'}</span>
+                <span class="cp-search-meta-badge ${(c.tier || '').toLowerCase().includes('gold') ? 'gold' : 'silver'}">${c.tier || 'Member'}</span>
+              </div>
+            </div>
+            <div class="cp-search-points"><i class="ri-coin-line"></i> ${c.points || 0} pts</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    searchDropdown.classList.remove('hidden');
+    searchDropdown.classList.add('open');
   };
+}
+
+window.selectCustomerFromSearch = function(custId) {
+  const cust = CustomerStore.customers.find(c => String(c.id) === String(custId));
+  if (cust) {
+    AppState.activeCustomerProfile = cust;
+    updateDrawerHeader(cust);
+    renderCustomerProfileTabContent();
+  }
+  const searchDropdown = document.getElementById('cp-search-dropdown');
+  const searchInput = document.getElementById('cp-customer-search-input');
+  const clearBtn = document.getElementById('cp-clear-search-btn');
+  if (searchDropdown) {
+    searchDropdown.classList.remove('open');
+    searchDropdown.classList.add('hidden');
+  }
+  if (searchInput) searchInput.value = '';
+  if (clearBtn) clearBtn.classList.add('hidden');
+};
+
+window.clearCustomerSearch = function() {
+  const searchInput = document.getElementById('cp-customer-search-input');
+  const searchDropdown = document.getElementById('cp-search-dropdown');
+  const clearBtn = document.getElementById('cp-clear-search-btn');
+  if (searchInput) searchInput.value = '';
+  if (searchDropdown) {
+    searchDropdown.classList.remove('open');
+    searchDropdown.classList.add('hidden');
+  }
+  if (clearBtn) clearBtn.classList.add('hidden');
+};
+
+// ==========================================
+// TAB CONTENT ROUTER (STRICTLY ISOLATED)
+// ==========================================
+
+function renderCustomerProfileTabContent() {
+  const container = document.getElementById('cp-drawer-body');
+  if (!container) return;
+
+  const customer = AppState.activeCustomerProfile;
+  if (!customer) {
+    container.innerHTML = `
+      <div class="cp-empty-state">
+        <div class="cp-empty-icon"><i class="ri-user-search-line"></i></div>
+        <h3 class="cp-empty-title">Select or Search a Customer</h3>
+        <p class="cp-empty-desc">Search by name, phone number, email address, or customer ID above to view customer details.</p>
+        <div class="cp-quick-pick-title">Quick Customer Directory</div>
+        <div class="cp-quick-pick-list">
+          ${CustomerStore.customers.map(c => `
+            <button type="button" class="cp-quick-pick-btn" onclick="selectCustomerFromSearch('${c.id}')">
+              <span><strong>${c.name}</strong> • ${c.tier}</span>
+              <span class="text-gold"><i class="ri-coin-line"></i> ${c.points} pts</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  const activeTab = AppState.customerProfileActiveTab || 'overview';
+
+  switch (activeTab) {
+    case 'overview':
+      renderCustomerOverviewTab(container, customer);
+      break;
+    case 'orders':
+      renderCustomerOrdersTab(container, customer);
+      break;
+    case 'receipts':
+      renderCustomerReceiptsTab(container, customer);
+      break;
+    case 'loyalty':
+      renderCustomerLoyaltyTab(container, customer);
+      break;
+    case 'favourites':
+      renderCustomerFavouritesTab(container, customer);
+      break;
+    case 'profile':
+      renderCustomerProfileDetailsTab(container, customer);
+      break;
+    default:
+      renderCustomerOverviewTab(container, customer);
+  }
+}
+
+// --------------------------------------------------------------------------
+// TAB 1: OVERVIEW TAB (Personalised Dashboard)
+// --------------------------------------------------------------------------
+
+function renderCustomerOverviewTab(container, customer) {
+  const initials = getCustomerInitials(customer);
+  const milestone = calculateLoyaltyMilestone(customer.points || 0);
+  const isAttachedToSale = AppState.cart.customer && String(AppState.cart.customer.id) === String(customer.id);
+  
+  // Strictly isolated customer orders & notifications
+  const custOrders = CustomerStore.ordersByCustomer[customer.id] || [];
+  const recentOrder = custOrders[0] || null;
+  const notifications = CustomerStore.notificationsByCustomer[customer.id] || [];
+  const favData = CustomerStore.favouritesByCustomer[customer.id] || { frequentItems: [] };
+
+  container.innerHTML = `
+    <!-- Top Identity Card with Attach Action -->
+    <div class="cp-profile-card">
+      <div class="cp-profile-main">
+        <div class="cp-profile-avatar-wrap ${milestone.currentTier.badge_class}">
+          ${customer.photo 
+            ? `<img src="${customer.photo}" alt="${customer.name}" class="cp-avatar-img">` 
+            : `<span>${initials}</span>`}
+          <span class="cp-tier-crown"><i class="${milestone.currentTier.icon}"></i></span>
+        </div>
+        <div class="cp-profile-details">
+          <div class="cp-profile-name-row">
+            <h3 class="cp-profile-name">${customer.name}</h3>
+            <span class="cp-tier-badge ${milestone.currentTier.badge_class}">
+              <i class="${milestone.currentTier.icon}"></i> ${customer.tier || milestone.currentTier.name}
+            </span>
+            <button type="button" class="btn btn-ghost btn-xs" onclick="openEditCustomerProfileModal('${customer.id}')" title="Edit Customer Profile" style="margin-left:auto; padding:2px 8px; font-size:12px; border:1px solid var(--color-border);">
+              <i class="ri-edit-line"></i> Edit
+            </button>
+          </div>
+          <div class="cp-profile-contacts">
+            <div class="cp-contact-item"><i class="ri-phone-line"></i> <span>${customer.mobile || 'No phone'}</span></div>
+            <div class="cp-contact-item"><i class="ri-mail-line"></i> <span>${customer.email || 'No email'}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attach / Detach Bar -->
+      <div class="cp-attach-bar">
+        <div class="cp-attach-status ${isAttachedToSale ? 'attached' : ''}">
+          <i class="${isAttachedToSale ? 'ri-checkbox-circle-fill' : 'ri-user-shared-line'}"></i>
+          <span>${isAttachedToSale ? 'Attached to Current Sale' : 'Not attached to sale'}</span>
+        </div>
+        ${isAttachedToSale ? `
+          <button type="button" class="cp-attach-btn btn-detach" onclick="detachCustomerFromCurrentSale()">
+            <i class="ri-close-line"></i> Detach
+          </button>
+        ` : `
+          <button type="button" class="cp-attach-btn btn-attach" onclick="attachCustomerToCurrentSale('${customer.id}')">
+            <i class="ri-user-add-line"></i> Attach to Cart
+          </button>
+        `}
+      </div>
+    </div>
+
+    <!-- 4 Key KPI Cards -->
+    <div class="cp-metrics-grid">
+      <div class="cp-metric-box highlight">
+        <div class="cp-metric-val"><i class="ri-coin-line text-gold"></i> ${customer.points || 0}</div>
+        <div class="cp-metric-lbl">Loyalty Points</div>
+      </div>
+      <div class="cp-metric-box">
+        <div class="cp-metric-val" style="font-size:13px; font-weight:800; color:${milestone.currentTier.color};">
+          ${customer.tier ? customer.tier.replace(' Member', '').replace(' VIP', '') : 'Member'}
+        </div>
+        <div class="cp-metric-lbl">Current Level</div>
+      </div>
+      <div class="cp-metric-box">
+        <div class="cp-metric-val">${customer.total_orders || customer.visits || 0}</div>
+        <div class="cp-metric-lbl">Total Visits</div>
+      </div>
+      <div class="cp-metric-box">
+        <div class="cp-metric-val">$${typeof customer.total_spent === 'number' ? customer.total_spent.toFixed(2) : (customer.total_spent || '0.00')}</div>
+        <div class="cp-metric-lbl">Total Spending</div>
+      </div>
+    </div>
+
+    <!-- Next Loyalty Milestone Card -->
+    <div class="cp-milestone-card">
+      <div class="cp-milestone-header">
+        <div class="cp-milestone-title">
+          <i class="ri-flag-2-line text-gold"></i>
+          <span>${milestone.nextTier ? `Progress to ${milestone.nextTier.name}` : 'Highest Tier Achieved!'}</span>
+        </div>
+        <span class="cp-milestone-points">${customer.points || 0} / ${milestone.max} pts</span>
+      </div>
+
+      <div class="cp-progress-bar-bg">
+        <div class="cp-progress-bar-fill" style="width:${milestone.progressPct}%; background:${milestone.currentTier.color};"></div>
+      </div>
+
+      <div class="cp-milestone-footer">
+        ${milestone.nextTier ? `
+          <span><i class="ri-arrow-up-circle-line text-gold"></i> <strong>${milestone.needed} points</strong> needed to unlock ${milestone.nextTier.name}</span>
+        ` : `
+          <span class="text-success"><i class="ri-shield-check-line"></i> Top VIP Tier • Maximum multipliers & benefits active</span>
+        `}
+      </div>
+    </div>
+
+    <!-- Smart Notifications Section -->
+    ${notifications.length > 0 ? `
+      <div class="cp-section">
+        <div class="cp-section-header">
+          <span class="cp-section-title"><i class="ri-notification-3-line text-primary"></i> Personalised Updates</span>
+          <span style="font-size:11px; color:var(--color-cream-muted);">For ${customer.first_name}</span>
+        </div>
+        <div class="cp-notifications-list">
+          ${notifications.map(n => `
+            <div class="cp-notification-pill ${n.type}">
+              <span class="cp-notif-icon">${n.icon}</span>
+              <div class="cp-notif-body">
+                <strong>${n.title}</strong>
+                <p>${n.desc}</p>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- Recent Order Card (1-Tap Reorder) -->
+    ${recentOrder ? `
+      <div class="cp-section">
+        <div class="cp-section-header">
+          <span class="cp-section-title"><i class="ri-history-line text-primary"></i> Most Recent Order</span>
+          <button type="button" class="btn btn-ghost btn-xs" onclick="switchCustomerProfileTab('orders')">View All (${custOrders.length})</button>
+        </div>
+        <div class="cp-repeat-last-card">
+          <div class="cp-repeat-header">
+            <span class="cp-repeat-label"><i class="ri-repeat-line"></i> REPEAT LAST ORDER</span>
+            <span class="cp-repeat-date">${recentOrder.date} • ${recentOrder.time}</span>
+          </div>
+          <div class="cp-repeat-items">
+            ${recentOrder.items.map(it => `
+              <div class="cp-repeat-item-line">
+                <span><strong>${it.quantity}×</strong> ${it.name}</span>
+                ${it.customisations && it.customisations.length ? `<span class="cp-mod-chip">${it.customisations.map(m=>m.name).join(', ')}</span>` : ''}
+              </div>
+            `).join('')}
+          </div>
+          <div class="cp-repeat-action-row">
+            <span class="cp-repeat-total">Total: $${recentOrder.total.toFixed(2)}</span>
+            <button type="button" class="cp-repeat-btn" onclick="reorderHistoricalOrder('${recentOrder.id}', '${customer.id}')">
+              <i class="ri-shopping-cart-2-line"></i> Reorder Now
+            </button>
+          </div>
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- Member Benefits & Current Promotions -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-gift-2-line text-gold"></i> Member Benefits & Offers</span>
+        <button type="button" class="btn btn-ghost btn-xs" onclick="switchCustomerProfileTab('loyalty')">Full Perks</button>
+      </div>
+      <div class="cp-benefits-card">
+        <div class="cp-benefit-badge"><i class="${milestone.currentTier.icon}"></i> ${milestone.currentTier.name} Status</div>
+        <ul class="cp-benefits-bullets">
+          ${milestone.currentTier.benefits.map(b => `<li><i class="ri-check-line text-success"></i> ${b}</li>`).join('')}
+        </ul>
+        <div class="cp-promo-banner">
+          <div class="cp-promo-title"><i class="ri-fire-fill text-primary"></i> ${LoyaltyConfig.activePromotions[0].title}</div>
+          <p class="cp-promo-desc">${LoyaltyConfig.activePromotions[0].description}</p>
+          <span class="cp-promo-valid"><i class="ri-time-line"></i> Valid: ${LoyaltyConfig.activePromotions[0].valid_from} – ${LoyaltyConfig.activePromotions[0].valid_until}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Favourite Items -->
+    ${favData.frequentItems && favData.frequentItems.length > 0 ? `
+      <div class="cp-section">
+        <div class="cp-section-header">
+          <span class="cp-section-title"><i class="ri-heart-3-line text-primary"></i> Frequent Favourites</span>
+          <button type="button" class="btn btn-ghost btn-xs" onclick="switchCustomerProfileTab('favourites')">Manage</button>
+        </div>
+        <div class="cp-pairings-grid">
+          ${favData.frequentItems.slice(0, 3).map(fi => `
+            <div class="cp-pair-card">
+              <div class="cp-pair-icon"><i class="${fi.icon}"></i></div>
+              <div class="cp-pair-name" title="${fi.name}">${fi.name}</div>
+              <div class="cp-pair-price">$${fi.price.toFixed(2)}</div>
+              <button type="button" class="cp-pair-add-btn" onclick="addRecommendedItemToCart('${fi.name}')">
+                <i class="ri-add-line"></i> Add
+              </button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
+// --------------------------------------------------------------------------
+// TAB 2: ORDERS TAB (Strictly Isolated History with Filters & Search)
+// --------------------------------------------------------------------------
+
+AppState.customerOrdersFilter = 'all';
+AppState.customerOrdersSearch = '';
+
+function renderCustomerOrdersTab(container, customer) {
+  const allOrders = CustomerStore.ordersByCustomer[customer.id] || [];
+  const filter = AppState.customerOrdersFilter || 'all';
+  const query = (AppState.customerOrdersSearch || '').toLowerCase().trim();
+
+  // Apply Date Filtering
+  const now = new Date();
+  const filteredOrders = allOrders.filter(order => {
+    // 1. Date Filter
+    if (filter === 'today') {
+      const oDate = new Date(order.date_iso);
+      if (oDate.toDateString() !== now.toDateString()) return false;
+    } else if (filter === 'this_week') {
+      const oDate = new Date(order.date_iso);
+      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      if (oDate < oneWeekAgo) return false;
+    } else if (filter === 'this_month') {
+      const oDate = new Date(order.date_iso);
+      if (oDate.getMonth() !== now.getMonth() || oDate.getFullYear() !== now.getFullYear()) return false;
+    }
+
+    // 2. Query search
+    if (query) {
+      const matchesId = String(order.id).includes(query);
+      const matchesReceipt = String(order.receipt_id || '').toLowerCase().includes(query);
+      const matchesItem = order.items.some(it => it.name.toLowerCase().includes(query));
+      if (!matchesId && !matchesReceipt && !matchesItem) return false;
+    }
+
+    return true;
+  });
+
+  container.innerHTML = `
+    <!-- Header with Isolation Notice -->
+    <div class="cp-tab-section-header">
+      <div>
+        <h4 style="margin:0; font-size:15px; font-weight:800;"><i class="ri-file-list-3-line text-primary"></i> Order History</h4>
+        <span style="font-size:11px; color:var(--color-cream-muted);">Showing records exclusively for <strong>${customer.name}</strong></span>
+      </div>
+      <span class="badge badge-info">${filteredOrders.length} orders</span>
+    </div>
+
+    <!-- Filter & Search Controls -->
+    <div class="cp-order-filter-bar">
+      <div class="cp-order-search-wrap">
+        <i class="ri-search-line"></i>
+        <input type="text" id="cp-orders-search-input" placeholder="Search order # or items..." value="${escapeHtml(AppState.customerOrdersSearch || '')}" oninput="handleCustomerOrdersSearch(this.value)">
+      </div>
+
+      <div class="cp-order-date-filters">
+        <button type="button" class="cp-filter-pill ${filter === 'all' ? 'active' : ''}" onclick="setCustomerOrdersFilter('all')">All</button>
+        <button type="button" class="cp-filter-pill ${filter === 'today' ? 'active' : ''}" onclick="setCustomerOrdersFilter('today')">Today</button>
+        <button type="button" class="cp-filter-pill ${filter === 'this_week' ? 'active' : ''}" onclick="setCustomerOrdersFilter('this_week')">This Week</button>
+        <button type="button" class="cp-filter-pill ${filter === 'this_month' ? 'active' : ''}" onclick="setCustomerOrdersFilter('this_month')">This Month</button>
+      </div>
+    </div>
+
+    <!-- Orders Timeline -->
+    <div class="cp-history-timeline">
+      ${filteredOrders.length === 0 ? `
+        <div class="cp-empty-state" style="padding:30px 10px;">
+          <i class="ri-file-search-line" style="font-size:32px; color:var(--color-cream-muted);"></i>
+          <h4 style="margin:8px 0 2px 0;">No matching orders found</h4>
+          <p style="font-size:12px; color:var(--color-cream-muted); margin:0;">No order records match the selected filter for ${customer.name}.</p>
+        </div>
+      ` : filteredOrders.map(order => `
+        <div class="cp-history-card">
+          <div class="cp-history-top">
+            <div class="cp-history-id-group">
+              <span class="cp-history-id">Order #${order.id}</span>
+              <span class="cp-history-channel ${(order.channel || '').toLowerCase().includes('dine') ? 'dine-in' : 'takeaway'}">
+                ${(order.channel || '').toLowerCase().includes('dine') ? 'Dine-In' : 'Takeaway'}
+              </span>
+            </div>
+            <span class="cp-history-date">${order.date} • ${order.time}</span>
+          </div>
+
+          <div class="cp-history-items-list">
+            ${order.items.map(it => `
+              <div class="cp-history-item-row">
+                <div class="cp-history-item-title">
+                  <span class="cp-history-item-name"><strong>${it.quantity}×</strong> ${it.name}</span>
+                  ${it.customisations && it.customisations.length ? `
+                    <div class="cp-history-item-mods">
+                      ${it.customisations.map(m => `<span class="cp-mod-chip">${m.name}</span>`).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+                <span class="cp-history-item-price">$${(it.price * it.quantity).toFixed(2)}</span>
+              </div>
+            `).join('')}
+          </div>
+
+          <div class="cp-history-footer">
+            <div class="cp-history-total-group">
+              <span class="cp-history-pay-method"><i class="ri-bank-card-line"></i> ${order.payment_method || 'Card'}</span>
+              <span class="cp-history-total">$${order.total.toFixed(2)}</span>
+            </div>
+
+            <div style="display:flex; gap:8px;">
+              <button type="button" class="btn btn-outline btn-xs" onclick="openCustomerReceiptModal('${order.receipt_id || 'R' + order.id}', '${customer.id}')" title="View & Print Receipt">
+                <i class="ri-receipt-line"></i> Receipt
+              </button>
+              <button type="button" class="cp-history-reorder-btn" onclick="reorderHistoricalOrder('${order.id}', '${customer.id}')" title="Add items to cart">
+                <i class="ri-repeat-line"></i> Reorder
+              </button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+window.setCustomerOrdersFilter = function(filterName) {
+  AppState.customerOrdersFilter = filterName;
+  renderCustomerProfileTabContent();
+};
+
+window.handleCustomerOrdersSearch = function(val) {
+  AppState.customerOrdersSearch = val;
+  renderCustomerProfileTabContent();
+};
+
+// --------------------------------------------------------------------------
+// TAB 3: RECEIPTS & PAYMENTS TAB (Strictly Isolated Payments)
+// --------------------------------------------------------------------------
+
+function renderCustomerReceiptsTab(container, customer) {
+  const receipts = CustomerStore.receiptsByCustomer[customer.id] || [];
+
+  container.innerHTML = `
+    <!-- Header with Isolation Notice -->
+    <div class="cp-tab-section-header">
+      <div>
+        <h4 style="margin:0; font-size:15px; font-weight:800;"><i class="ri-receipt-line text-primary"></i> Payment Receipts</h4>
+        <span style="font-size:11px; color:var(--color-cream-muted);">Isolated ledger for <strong>${customer.name}</strong></span>
+      </div>
+      <span class="badge badge-info">${receipts.length} receipts</span>
+    </div>
+
+    <!-- Receipts Cards -->
+    <div class="cp-receipts-list">
+      ${receipts.length === 0 ? `
+        <div class="cp-empty-state" style="padding:30px 10px;">
+          <i class="ri-receipt-line" style="font-size:32px; color:var(--color-cream-muted);"></i>
+          <h4 style="margin:8px 0 2px 0;">No Receipts Found</h4>
+          <p style="font-size:12px; color:var(--color-cream-muted); margin:0;">No payment receipts have been recorded for ${customer.name}.</p>
+        </div>
+      ` : receipts.map(rcpt => `
+        <div class="cp-receipt-card">
+          <div class="cp-receipt-top">
+            <div class="cp-receipt-badge">
+              <i class="ri-check-line text-success"></i>
+              <span>${rcpt.status || 'Settled'}</span>
+            </div>
+            <strong class="cp-receipt-amount">$${rcpt.total.toFixed(2)}</strong>
+          </div>
+
+          <div class="cp-receipt-meta">
+            <div><strong>Receipt:</strong> #${rcpt.receipt_id}</div>
+            <div><strong>Order:</strong> #${rcpt.order_id}</div>
+            <div><strong>Date:</strong> ${rcpt.date}</div>
+            <div><strong>Payment:</strong> ${rcpt.method}</div>
+            ${rcpt.emailed_to ? `<div class="text-info"><i class="ri-mail-check-line"></i> Emailed to: ${rcpt.emailed_to}</div>` : ''}
+          </div>
+
+          <div class="cp-receipt-actions-grid">
+            <button type="button" class="btn btn-outline btn-xs" onclick="openCustomerReceiptModal('${rcpt.receipt_id}', '${customer.id}')">
+              <i class="ri-eye-line"></i> View
+            </button>
+            <button type="button" class="btn btn-outline btn-xs" onclick="printCustomerReceiptDirect('${rcpt.receipt_id}', '${customer.id}')">
+              <i class="ri-printer-line"></i> Print
+            </button>
+            <button type="button" class="btn btn-outline btn-xs" onclick="sendCustomerReceiptPrompt('${rcpt.receipt_id}', '${customer.id}')">
+              <i class="ri-mail-send-line"></i> Send
+            </button>
+            <button type="button" class="btn btn-primary btn-xs" onclick="downloadCustomerReceiptDirect('${rcpt.receipt_id}', '${customer.id}')">
+              <i class="ri-download-2-line"></i> PDF
+            </button>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+// --------------------------------------------------------------------------
+// TAB 4: LOYALTY TAB (Dedicated Program, Milestone, Activity Ledger)
+// --------------------------------------------------------------------------
+
+function renderCustomerLoyaltyTab(container, customer) {
+  const milestone = calculateLoyaltyMilestone(customer.points || 0);
+  const ledger = CustomerStore.loyaltyByCustomer[customer.id] || [];
+
+  container.innerHTML = `
+    <!-- Top Loyalty Status Hero Card -->
+    <div class="cp-loyalty-hero-card">
+      <div class="cp-loyalty-hero-top">
+        <div>
+          <span class="cp-tier-badge ${milestone.currentTier.badge_class}">
+            <i class="${milestone.currentTier.icon}"></i> ${customer.tier || milestone.currentTier.name}
+          </span>
+          <h3 style="margin:6px 0 0 0; font-size:22px; font-weight:800; color:var(--color-cream);">
+            ${customer.points || 0} <span style="font-size:14px; font-weight:600; color:var(--color-accent-gold);">Available Points</span>
+          </h3>
+        </div>
+        <div class="cp-loyalty-rate-pill">
+          <span>Earning Rate</span>
+          <strong>${milestone.currentTier.multiplier}</strong>
+        </div>
+      </div>
+
+      <!-- Visual Progress Bar -->
+      <div class="cp-loyalty-progress-section">
+        <div class="cp-loyalty-progress-meta">
+          <span>${milestone.currentTier.name}</span>
+          <span>${customer.points || 0} / ${milestone.max} points</span>
+        </div>
+        <div class="cp-progress-bar-bg">
+          <div class="cp-progress-bar-fill" style="width:${milestone.progressPct}%; background:${milestone.currentTier.color};"></div>
+        </div>
+        <div class="cp-loyalty-progress-status">
+          ${milestone.nextTier ? `
+            <span><i class="ri-sparkling-fill text-gold"></i> <strong>${milestone.needed} points</strong> until ${milestone.nextTier.name}</span>
+          ` : `
+            <span class="text-success"><i class="ri-award-fill"></i> Maximum Platinum Tier Unlocked</span>
+          `}
+          <span style="color:var(--color-cream-muted); font-size:11px;">Expires: ${customer.points_expiry || '31 Dec 2026'}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Available Rewards Section with Instant Point Deduction -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-gift-line text-gold"></i> Available Rewards to Redeem</span>
+        <span style="font-size:11px; color:var(--color-cream-muted);">${customer.points || 0} Pts Balance</span>
+      </div>
+      <div class="cp-rewards-grid">
+        ${LoyaltyConfig.rewards.map(rw => {
+          const canClaim = (customer.points || 0) >= rw.cost;
+          return `
+            <div class="cp-reward-card">
+              <div class="cp-reward-top">
+                <div class="cp-reward-icon"><i class="${rw.icon}"></i></div>
+                <div class="cp-reward-info">
+                  <h4 class="cp-reward-title">${rw.name}</h4>
+                  <div class="cp-reward-pts"><i class="ri-coin-line"></i> ${rw.cost} Points</div>
+                </div>
+              </div>
+              <p style="font-size:11px; color:var(--color-cream-muted); margin:4px 0 8px 0;">${rw.desc}</p>
+              <button type="button" class="cp-reward-btn" ${canClaim ? '' : 'disabled'} onclick="claimLoyaltyReward('${rw.id}', ${rw.cost}, '${rw.name}')">
+                ${canClaim ? '<i class="ri-check-line"></i> Redeem Reward' : `Need ${rw.cost - (customer.points || 0)} More Pts`}
+              </button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Tier Breakdown & Configurable Benefits -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-medal-fill text-primary"></i> Loyalty Tiers & Benefits</span>
+      </div>
+      <div class="cp-tiers-container">
+        ${LoyaltyConfig.tiers.map(t => {
+          const isCurrent = (customer.tier || '').toLowerCase().includes(t.key);
+          return `
+            <div class="cp-tier-row-card ${isCurrent ? 'active' : ''}">
+              <div class="cp-tier-row-head">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <i class="${t.icon}" style="color:${t.color}; font-size:16px;"></i>
+                  <strong>${t.name}</strong>
+                  ${isCurrent ? '<span class="cp-badge-current">Your Level</span>' : ''}
+                </div>
+                <span style="font-size:11px; color:var(--color-cream-muted);">${t.min_points}${t.max_points < 99999 ? '–' + t.max_points : '+'} pts</span>
+              </div>
+              <ul class="cp-tier-perks">
+                ${t.benefits.map(b => `<li><i class="ri-check-line"></i> ${b}</li>`).join('')}
+              </ul>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Chronological Loyalty Activity Ledger -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-history-line text-primary"></i> Loyalty Points Activity</span>
+        <span style="font-size:11px; color:var(--color-cream-muted);">Recent transactions</span>
+      </div>
+      <div class="cp-loyalty-ledger">
+        ${ledger.length === 0 ? `
+          <div style="padding:16px; text-align:center; color:var(--color-cream-muted); font-size:12px;">No loyalty transactions recorded yet.</div>
+        ` : ledger.map(entry => `
+          <div class="cp-ledger-item ${entry.type}">
+            <div class="cp-ledger-left">
+              <span class="cp-ledger-pts">${entry.points > 0 ? '+' : ''}${entry.points} pts</span>
+              <div class="cp-ledger-desc">${entry.desc}</div>
+            </div>
+            <span class="cp-ledger-date">${entry.date}</span>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// --------------------------------------------------------------------------
+// TAB 5: FAVOURITES TAB (Frequent Items & Custom Saved Combos)
+// --------------------------------------------------------------------------
+
+function renderCustomerFavouritesTab(container, customer) {
+  const favData = CustomerStore.favouritesByCustomer[customer.id] || { frequentItems: [], savedCombos: [] };
+  const frequentItems = favData.frequentItems || [];
+  const savedCombos = favData.savedCombos || [];
+
+  container.innerHTML = `
+    <!-- Header with Action -->
+    <div class="cp-tab-section-header">
+      <div>
+        <h4 style="margin:0; font-size:15px; font-weight:800;"><i class="ri-heart-3-line text-primary"></i> Customer Favourites</h4>
+        <span style="font-size:11px; color:var(--color-cream-muted);">Frequently ordered by <strong>${customer.name}</strong></span>
+      </div>
+      <button type="button" class="btn btn-outline btn-xs" onclick="saveActiveCartAsCustomerFavourite('${customer.id}')" title="Save current sale cart as a favourite combo">
+        <i class="ri-bookmark-line"></i> Save Cart as Combo
+      </button>
+    </div>
+
+    <!-- Auto-Detected Frequent Items -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-star-line text-gold"></i> Most Ordered Items</span>
+        <span style="font-size:11px; color:var(--color-cream-muted);">Auto-tracked</span>
+      </div>
+      <div class="cp-frequent-items-list">
+        ${frequentItems.length === 0 ? `
+          <div style="padding:16px; text-align:center; color:var(--color-cream-muted); font-size:12px;">No frequent items tracked yet.</div>
+        ` : frequentItems.map(it => `
+          <div class="cp-frequent-item-card">
+            <div class="cp-frequent-item-icon"><i class="${it.icon}"></i></div>
+            <div class="cp-frequent-item-info">
+              <strong>${it.name}</strong>
+              <span>${it.defaultMods || 'Standard'} • Ordered ${it.count}×</span>
+            </div>
+            <div class="cp-frequent-item-right">
+              <span class="cp-frequent-price">$${it.price.toFixed(2)}</span>
+              <button type="button" class="btn btn-primary btn-xs" onclick="addRecommendedItemToCart('${it.name}')">
+                <i class="ri-add-line"></i> Order Again
+              </button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <!-- Saved Favourite Order Templates -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-bookmark-3-line text-primary"></i> Saved Favourite Combos</span>
+        <span class="badge badge-info">${savedCombos.length} saved</span>
+      </div>
+      <div class="cp-combos-grid">
+        ${savedCombos.length === 0 ? `
+          <div style="grid-column:1/-1; padding:20px; text-align:center; color:var(--color-cream-muted); font-size:12px;">
+            No saved favourite combos yet. Add items to cart and click "Save Cart as Combo" above!
+          </div>
+        ` : savedCombos.map(combo => `
+          <div class="cp-combo-card">
+            <div class="cp-combo-title"><i class="ri-heart-fill text-danger"></i> ${combo.name}</div>
+            <p class="cp-combo-items">${combo.desc}</p>
+            <div class="cp-combo-action-row">
+              <strong class="cp-combo-price">$${combo.price.toFixed(2)}</strong>
+              <button type="button" class="cp-combo-btn" onclick="reorderNamedCombo('${combo.name}', '${customer.id}')">
+                <i class="ri-shopping-cart-2-line"></i> Order Combo
+              </button>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// --------------------------------------------------------------------------
+// TAB 6: PROFILE DETAILS TAB (Full Profile & Edit Profile Trigger)
+// --------------------------------------------------------------------------
+
+function renderCustomerProfileDetailsTab(container, customer) {
+  const initials = getCustomerInitials(customer);
+
+  container.innerHTML = `
+    <!-- Top Identity Card -->
+    <div class="cp-profile-card">
+      <div class="cp-profile-main">
+        <div class="cp-profile-avatar-wrap tier-gold">
+          ${customer.photo 
+            ? `<img src="${customer.photo}" alt="${customer.name}" class="cp-avatar-img">` 
+            : `<span>${initials}</span>`}
+        </div>
+        <div class="cp-profile-details">
+          <div class="cp-profile-name-row">
+            <h3 class="cp-profile-name">${customer.name}</h3>
+            <span class="cp-tier-badge tier-gold">${customer.tier || 'Member'}</span>
+          </div>
+          <span style="font-size:12px; color:var(--color-cream-muted);">Member Since: ${customer.member_since || 'October 2025'}</span>
+          <div class="cp-id-tag">Customer ID: #CUST-${String(customer.id).padStart(4, '0')}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:8px;">
+        <button type="button" class="btn btn-primary w-100" onclick="openEditCustomerProfileModal('${customer.id}')">
+          <i class="ri-edit-line"></i> Edit Profile & Photo
+        </button>
+      </div>
+    </div>
+
+    <!-- Complete Profile Metadata List -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-user-line text-primary"></i> Customer Contact & Information</span>
+      </div>
+      <div class="cp-details-list">
+        <div class="cp-detail-row">
+          <span class="cp-detail-lbl">Full Name</span>
+          <strong class="cp-detail-val">${customer.name}</strong>
+        </div>
+        <div class="cp-detail-row">
+          <span class="cp-detail-lbl">Phone Number</span>
+          <strong class="cp-detail-val">${customer.mobile || 'Not provided'}</strong>
+        </div>
+        <div class="cp-detail-row">
+          <span class="cp-detail-lbl">Email Address</span>
+          <strong class="cp-detail-val">${customer.email || 'Not provided'}</strong>
+        </div>
+        <div class="cp-detail-row">
+          <span class="cp-detail-lbl">Date of Birth</span>
+          <strong class="cp-detail-val">${customer.dob ? customer.dob : 'Not provided'}</strong>
+        </div>
+        <div class="cp-detail-row">
+          <span class="cp-detail-lbl">Street Address</span>
+          <strong class="cp-detail-val">${customer.address || 'Not provided'}</strong>
+        </div>
+        <div class="cp-detail-row">
+          <span class="cp-detail-lbl">Loyalty Tier</span>
+          <strong class="cp-detail-val text-gold">${customer.tier} (${customer.points || 0} Points)</strong>
+        </div>
+        <div class="cp-detail-row">
+          <span class="cp-detail-lbl">Lifetime Spend</span>
+          <strong class="cp-detail-val">$${typeof customer.total_spent === 'number' ? customer.total_spent.toFixed(2) : customer.total_spent} AUD</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Preferences & Notes -->
+    <div class="cp-section">
+      <div class="cp-section-header">
+        <span class="cp-section-title"><i class="ri-price-tag-3-line text-primary"></i> Dietary Tags & Preferences</span>
+      </div>
+      <div class="cp-tags-row">
+        ${(customer.tags || []).map(tag => `<span class="cp-tag-pill tag-pref">${tag}</span>`).join('')}
+      </div>
+      <div class="cp-notes-box" style="margin-top:10px;">
+        <i class="ri-sticky-note-line"></i>
+        <p class="cp-notes-text">${customer.notes || 'No operational notes on file.'}</p>
+      </div>
+    </div>
+  `;
+}
+
+// ==========================================
+// EDIT PROFILE CONTROLLER (PHOTO, FIELDS, VALIDATION)
+// ==========================================
+
+let _tempProfilePhotoData = null;
+
+window.openEditCustomerProfileModal = function(customerId) {
+  let cust = null;
+  if (customerId) {
+    cust = CustomerStore.customers.find(c => String(c.id) === String(customerId) || String(c.customer_id) === String(customerId));
+    if (cust) AppState.activeCustomerProfile = cust;
+  }
+  if (!cust) {
+    cust = AppState.activeCustomerProfile;
+  }
+  if (!cust && AppState.activeRole === 'customer') {
+    const custId = (AppState.currentUser && (AppState.currentUser.customer_id || AppState.currentUser.id)) || '7';
+    cust = CustomerStore.customers.find(c => String(c.id) === String(custId) || String(c.customer_id) === String(custId)) ||
+           CustomerStore.customers.find(c => c.name.toLowerCase().includes('sophia')) ||
+           CustomerStore.customers[0];
+    AppState.activeCustomerProfile = cust;
+  }
+  if (!cust) {
+    cust = CustomerStore.customers[0];
+    AppState.activeCustomerProfile = cust;
+  }
+
+  const modal = document.getElementById('edit-customer-profile-modal');
+  if (!modal) return;
+
+  _tempProfilePhotoData = cust.photo || null;
+
+  // Populate form fields
+  const fNameEl = document.getElementById('edit-cp-first-name');
+  const lNameEl = document.getElementById('edit-cp-last-name');
+  const phoneEl = document.getElementById('edit-cp-phone');
+  const emailEl = document.getElementById('edit-cp-email');
+  const dobEl = document.getElementById('edit-cp-dob');
+  const addrEl = document.getElementById('edit-cp-address');
+  const tagsEl = document.getElementById('edit-cp-tags');
+  const notesEl = document.getElementById('edit-cp-notes');
+
+  if (fNameEl) fNameEl.value = cust.first_name || (cust.name ? cust.name.split(' ')[0] : '');
+  if (lNameEl) lNameEl.value = cust.last_name || (cust.name ? cust.name.split(' ').slice(1).join(' ') : '');
+  if (phoneEl) phoneEl.value = cust.mobile || cust.phone || '';
+  if (emailEl) emailEl.value = cust.email || '';
+  if (dobEl) dobEl.value = cust.dob || '';
+  if (addrEl) addrEl.value = cust.address || '';
+  if (tagsEl) tagsEl.value = (cust.tags || []).join(', ');
+  if (notesEl) notesEl.value = cust.notes || '';
+
+  // Update photo preview
+  updateEditModalPhotoPreview(_tempProfilePhotoData, getCustomerInitials(cust));
+
+  // Hide validation errors
+  const pErr = document.getElementById('edit-cp-phone-error');
+  const eErr = document.getElementById('edit-cp-email-error');
+  if (pErr) pErr.style.display = 'none';
+  if (eErr) eErr.style.display = 'none';
 
   modal.classList.remove('hidden');
+};
+
+window.closeEditCustomerProfileModal = function() {
+  const modal = document.getElementById('edit-customer-profile-modal');
+  if (modal) modal.classList.add('hidden');
+  _tempProfilePhotoData = null;
+};
+
+function updateEditModalPhotoPreview(photoUrl, initials) {
+  const imgEl = document.getElementById('edit-cp-avatar-img');
+  const initEl = document.getElementById('edit-cp-avatar-initials');
+  const removeBtn = document.getElementById('remove-cp-photo-btn');
+
+  if (photoUrl) {
+    if (imgEl) {
+      imgEl.src = photoUrl;
+      imgEl.classList.remove('hidden');
+    }
+    if (initEl) initEl.classList.add('hidden');
+    if (removeBtn) removeBtn.classList.remove('hidden');
+  } else {
+    if (imgEl) {
+      imgEl.src = '';
+      imgEl.classList.add('hidden');
+    }
+    if (initEl) {
+      initEl.innerText = initials || '??';
+      initEl.classList.remove('hidden');
+    }
+    if (removeBtn) removeBtn.classList.add('hidden');
+  }
+}
+
+window.handleProfilePhotoFileChange = function(event) {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    _tempProfilePhotoData = e.target.result;
+    updateEditModalPhotoPreview(_tempProfilePhotoData, getCustomerInitials(AppState.activeCustomerProfile));
+    showToast('Photo selected! Click Save Profile Changes to apply.', 'info');
+  };
+  reader.readAsDataURL(file);
+};
+
+window.removeCustomerProfilePhoto = function() {
+  _tempProfilePhotoData = null;
+  const inits = getCustomerInitials(AppState.activeCustomerProfile);
+  updateEditModalPhotoPreview(null, inits);
+  showToast('Photo removed. Initials will be used as avatar.', 'info');
+};
+
+window.saveCustomerProfile = async function(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  const cust = AppState.activeCustomerProfile;
+  if (!cust) {
+    showToast('No active customer profile selected.', 'error');
+    return;
+  }
+
+  const firstNameEl = document.getElementById('edit-cp-first-name');
+  const lastNameEl = document.getElementById('edit-cp-last-name');
+  const phoneEl = document.getElementById('edit-cp-phone');
+  const emailEl = document.getElementById('edit-cp-email');
+  const dobEl = document.getElementById('edit-cp-dob');
+  const addressEl = document.getElementById('edit-cp-address');
+  const tagsEl = document.getElementById('edit-cp-tags');
+  const notesEl = document.getElementById('edit-cp-notes');
+
+  const firstName = firstNameEl ? firstNameEl.value.trim() : (cust.first_name || '');
+  const lastName = lastNameEl ? lastNameEl.value.trim() : (cust.last_name || '');
+  const phone = phoneEl ? phoneEl.value.trim() : (cust.mobile || '');
+  const email = emailEl ? emailEl.value.trim() : (cust.email || '');
+  const dob = dobEl ? dobEl.value : (cust.dob || '');
+  const address = addressEl ? addressEl.value.trim() : (cust.address || '');
+  const tagsStr = tagsEl ? tagsEl.value.trim() : '';
+  const notes = notesEl ? notesEl.value.trim() : (cust.notes || '');
+
+  // Validate Phone
+  const phoneRegex = /^[\d\s\+\(\)\-]{8,20}$/;
+  const phoneErr = document.getElementById('edit-cp-phone-error');
+  if (!phone || !phoneRegex.test(phone)) {
+    if (phoneErr) phoneErr.style.display = 'block';
+    return;
+  }
+  if (phoneErr) phoneErr.style.display = 'none';
+
+  // Validate Email
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const emailErr = document.getElementById('edit-cp-email-error');
+  if (!email || !emailRegex.test(email)) {
+    if (emailErr) emailErr.style.display = 'block';
+    return;
+  }
+  if (emailErr) emailErr.style.display = 'none';
+
+  const saveBtn = document.getElementById('save-cp-btn');
+  const origBtnText = saveBtn ? saveBtn.innerHTML : '';
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="ri-loader-4-line ri-spin"></i> Saving Changes...';
+  }
+
+  try {
+    // Apply Updates to Customer in CustomerStore
+    cust.first_name = firstName;
+    cust.last_name = lastName;
+    cust.name = `${firstName} ${lastName}`.trim();
+    cust.mobile = phone;
+    cust.phone = phone;
+    cust.email = email;
+    cust.dob = dob;
+    cust.address = address;
+    cust.notes = notes;
+    cust.photo = _tempProfilePhotoData;
+    cust.tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+    // Also update matching customer in DB.customers
+    if (DB.customers && Array.isArray(DB.customers)) {
+      const dbCust = DB.customers.find(c => String(c.id) === String(cust.id) || String(c.customer_id) === String(cust.id) || c.email === cust.email);
+      if (dbCust) {
+        dbCust.first_name = firstName;
+        dbCust.last_name = lastName;
+        dbCust.name = cust.name;
+        dbCust.mobile = phone;
+        dbCust.phone = phone;
+        dbCust.email = email;
+        dbCust.address = address;
+        dbCust.notes = notes;
+        dbCust.photo = cust.photo;
+        dbCust.tags = cust.tags;
+      }
+      if (typeof saveLocalDB === 'function') saveLocalDB();
+    }
+
+    // Also update AppState.currentUser if active user is this customer
+    const isCurrentUser = (AppState.activeRole === 'customer') || 
+      (AppState.currentUser && (String(AppState.currentUser.customer_id) === String(cust.id) || String(AppState.currentUser.id) === String(cust.id) || AppState.currentUser.email === cust.email));
+
+    if (isCurrentUser) {
+      if (!AppState.currentUser) AppState.currentUser = {};
+      AppState.currentUser.first_name = firstName;
+      AppState.currentUser.last_name = lastName;
+      AppState.currentUser.name = cust.name;
+      AppState.currentUser.email = email;
+      AppState.currentUser.phone = phone;
+      AppState.currentUser.mobile = phone;
+      if (cust.photo) AppState.currentUser.photo = cust.photo;
+      localStorage.setItem('RAVENHILL_AUTH_USER', JSON.stringify(AppState.currentUser));
+      applyRoleToUI(AppState.activeRole || 'customer');
+    }
+
+    // Attempt backend API persist
+    const apiId = cust.customer_id || cust.id;
+    if (apiId && !isNaN(Number(apiId)) && window.API && API.updateCustomer) {
+      try {
+        await API.updateCustomer(apiId, {
+          first_name: firstName,
+          last_name: lastName,
+          phone: phone,
+          email: email
+        });
+      } catch (err) {
+        console.warn('Backend API customer update:', err);
+      }
+    }
+
+    // If attached to current sale cart, update cart customer
+    if (AppState.cart.customer && (String(AppState.cart.customer.id) === String(cust.id) || String(AppState.cart.customer.customer_id) === String(cust.id))) {
+      AppState.cart.customer = cust;
+      renderCartUI();
+    }
+
+    closeEditCustomerProfileModal();
+    updateDrawerHeader(cust);
+    renderCustomerProfileTabContent();
+
+    if (AppState.activeModule === 'customers') {
+      renderCurrentModule();
+    }
+
+    showToast(`Profile for ${cust.name} updated successfully!`, 'success');
+  } catch (err) {
+    console.error('Error saving profile:', err);
+    showToast('An error occurred while saving profile changes.', 'error');
+  } finally {
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.innerHTML = origBtnText;
+    }
+  }
+};
+
+// ==========================================
+// CAMERA CAPTURE CONTROLLER
+// ==========================================
+
+let _cameraStream = null;
+
+window.openCameraCaptureModal = function() {
+  const modal = document.getElementById('camera-capture-modal');
+  const video = document.getElementById('camera-video-feed');
+  const canvas = document.getElementById('camera-snapshot-canvas');
+  const snapBtn = document.getElementById('camera-snap-btn');
+  const retakeBtn = document.getElementById('camera-retake-btn');
+  const useBtn = document.getElementById('camera-use-btn');
+  const statusMsg = document.getElementById('camera-status-msg');
+
+  if (!modal || !video) return;
+
+  canvas.classList.add('hidden');
+  video.classList.remove('hidden');
+  snapBtn.classList.remove('hidden');
+  retakeBtn.classList.add('hidden');
+  useBtn.classList.add('hidden');
+  statusMsg.innerText = 'Position customer in front of camera and tap Capture.';
+
+  modal.classList.remove('hidden');
+
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    navigator.mediaDevices.getUserMedia({ video: { width: 400, height: 400, facingMode: 'user' } })
+      .then(stream => {
+        _cameraStream = stream;
+        video.srcObject = stream;
+      })
+      .catch(err => {
+        console.warn('Camera access error:', err);
+        statusMsg.innerText = 'Camera unavailable. Please upload a photo or use initials.';
+      });
+  } else {
+    statusMsg.innerText = 'Camera not supported on this device. Please use file upload.';
+  }
+};
+
+window.closeCameraCaptureModal = function() {
+  const modal = document.getElementById('camera-capture-modal');
+  if (modal) modal.classList.add('hidden');
+
+  if (_cameraStream) {
+    _cameraStream.getTracks().forEach(track => track.stop());
+    _cameraStream = null;
+  }
+};
+
+window.captureCameraSnapshot = function() {
+  const video = document.getElementById('camera-video-feed');
+  const canvas = document.getElementById('camera-snapshot-canvas');
+  const snapBtn = document.getElementById('camera-snap-btn');
+  const retakeBtn = document.getElementById('camera-retake-btn');
+  const useBtn = document.getElementById('camera-use-btn');
+  const statusMsg = document.getElementById('camera-status-msg');
+
+  if (!video || !canvas) return;
+
+  canvas.width = 300;
+  canvas.height = 300;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, 300, 300);
+
+  video.classList.add('hidden');
+  canvas.classList.remove('hidden');
+
+  snapBtn.classList.add('hidden');
+  retakeBtn.classList.remove('hidden');
+  useBtn.classList.remove('hidden');
+  statusMsg.innerText = 'Photo captured! Click "Use This Photo" or "Retake".';
+};
+
+window.retakeCameraSnapshot = function() {
+  const video = document.getElementById('camera-video-feed');
+  const canvas = document.getElementById('camera-snapshot-canvas');
+  const snapBtn = document.getElementById('camera-snap-btn');
+  const retakeBtn = document.getElementById('camera-retake-btn');
+  const useBtn = document.getElementById('camera-use-btn');
+  const statusMsg = document.getElementById('camera-status-msg');
+
+  canvas.classList.add('hidden');
+  video.classList.remove('hidden');
+  snapBtn.classList.remove('hidden');
+  retakeBtn.classList.add('hidden');
+  useBtn.classList.add('hidden');
+  statusMsg.innerText = 'Position customer and tap Capture.';
+};
+
+window.useCameraSnapshot = function() {
+  const canvas = document.getElementById('camera-snapshot-canvas');
+  if (canvas) {
+    _tempProfilePhotoData = canvas.toDataURL('image/jpeg', 0.9);
+    updateEditModalPhotoPreview(_tempProfilePhotoData, getCustomerInitials(AppState.activeCustomerProfile));
+    showToast('Photo captured and loaded! Remember to save profile.', 'success');
+  }
+  closeCameraCaptureModal();
+};
+
+// ==========================================
+// DIGITAL RECEIPT MODAL & ACTIONS
+// ==========================================
+
+window.openCustomerReceiptModal = function(receiptId, customerId) {
+  const modal = document.getElementById('customer-receipt-modal');
+  if (!modal) return;
+
+  const targetCust = customerId 
+    ? CustomerStore.customers.find(c => String(c.id) === String(customerId)) 
+    : AppState.activeCustomerProfile;
+  if (!targetCust) return;
+
+  // Strict lookup in customer's isolated receipts & orders
+  const receipts = CustomerStore.receiptsByCustomer[targetCust.id] || [];
+  const rcpt = receipts.find(r => String(r.receipt_id) === String(receiptId)) || receipts[0];
+  const orders = CustomerStore.ordersByCustomer[targetCust.id] || [];
+  const order = orders.find(o => String(o.id) === String(rcpt ? rcpt.order_id : '9051')) || orders[0];
+
+  if (!rcpt || !order) {
+    showToast('Receipt record not found for this customer.', 'warning');
+    return;
+  }
+
+  // Populate digital receipt paper
+  document.getElementById('cust-receipt-modal-subtitle').innerText = `Receipt #${rcpt.receipt_id} • Order #${rcpt.order_id}`;
+  document.getElementById('dr-receipt-num').innerText = `#${rcpt.receipt_id}`;
+  document.getElementById('dr-order-num').innerText = `#${rcpt.order_id}`;
+  document.getElementById('dr-date').innerText = rcpt.date;
+  document.getElementById('dr-customer-name').innerText = targetCust.name;
+  document.getElementById('dr-channel').innerText = order.channel || 'Dine In';
+  document.getElementById('dr-customer-id').innerText = `#CUST-${String(targetCust.id).padStart(4, '0')}`;
+  document.getElementById('dr-payment-method').innerText = rcpt.method || 'Card';
+  document.getElementById('dr-destination-email').innerText = rcpt.emailed_to || targetCust.email || 'None';
+
+  const subtotal = (rcpt.total / 1.10).toFixed(2);
+  const tax = (rcpt.total - subtotal).toFixed(2);
+
+  document.getElementById('dr-subtotal').innerText = `$${subtotal}`;
+  document.getElementById('dr-tax').innerText = `$${tax}`;
+  document.getElementById('dr-total').innerText = `$${rcpt.total.toFixed(2)}`;
+  document.getElementById('dr-loyalty-earned-line').innerHTML = `<i class="ri-vip-crown-fill text-gold"></i> +${Math.round(rcpt.total)} Loyalty Points Earned`;
+
+  // Render items table
+  const tbody = document.getElementById('dr-items-tbody');
+  if (tbody) {
+    tbody.innerHTML = order.items.map(it => `
+      <tr>
+        <td style="padding:4px 0;">
+          <div style="font-weight:700;">${it.name}</div>
+          ${it.customisations && it.customisations.length ? `
+            <div style="font-size:10px; color:#666;">${it.customisations.map(m=>m.name).join(', ')}</div>
+          ` : ''}
+        </td>
+        <td style="text-align:center; padding:4px 0;">${it.quantity}</td>
+        <td style="text-align:right; padding:4px 0; font-weight:700;">$${(it.price * it.quantity).toFixed(2)}</td>
+      </tr>
+    `).join('');
+  }
+
+  modal.classList.remove('hidden');
+};
+
+window.closeCustomerReceiptModal = function() {
+  const modal = document.getElementById('customer-receipt-modal');
+  if (modal) modal.classList.add('hidden');
+};
+
+window.printCustomerDigitalReceipt = function() {
+  window.print();
+};
+
+window.printCustomerReceiptDirect = function(receiptId, customerId) {
+  openCustomerReceiptModal(receiptId, customerId);
+  setTimeout(() => window.print(), 200);
+};
+
+window.sendCustomerDigitalReceiptEmail = function() {
+  const email = document.getElementById('dr-destination-email').innerText;
+  showToast(`Digital receipt sent to ${email}`, 'success');
+};
+
+window.sendCustomerReceiptPrompt = function(receiptId, customerId) {
+  const cust = CustomerStore.customers.find(c => String(c.id) === String(customerId));
+  const defaultEmail = cust ? cust.email : '';
+  const email = prompt(`Send receipt #${receiptId} to email address:`, defaultEmail);
+  if (email && email.includes('@')) {
+    showToast(`Receipt #${receiptId} sent successfully to ${email}`, 'success');
+  }
+};
+
+window.downloadCustomerDigitalReceipt = function() {
+  const receiptNum = document.getElementById('dr-receipt-num').innerText;
+  const custName = document.getElementById('dr-customer-name').innerText;
+  const total = document.getElementById('dr-total').innerText;
+  const content = `
+========================================
+         RAVENHILL COFFEE ROASTERS
+      Specialty Coffee & Kitchen
+     Prahran Market • Melbourne VIC
+========================================
+Receipt: ${receiptNum}
+Customer: ${custName}
+Total: ${total}
+Status: Paid & Settled
+Thank you for visiting Ravenhill Coffee!
+========================================
+`;
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `Ravenhill_Receipt_${receiptNum}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  showToast('Receipt downloaded successfully!', 'info');
+};
+
+window.downloadCustomerReceiptDirect = function(receiptId, customerId) {
+  openCustomerReceiptModal(receiptId, customerId);
+  downloadCustomerDigitalReceipt();
+};
+
+// ==========================================
+// REORDER ENGINE & CART ACTIONS
+// ==========================================
+
+window.reorderHistoricalOrder = function(orderId, customerId) {
+  const targetCust = customerId 
+    ? CustomerStore.customers.find(c => String(c.id) === String(customerId)) 
+    : AppState.activeCustomerProfile;
+  if (!targetCust) return;
+
+  const orders = CustomerStore.ordersByCustomer[targetCust.id] || [];
+  const order = orders.find(o => String(o.id) === String(orderId));
+  if (!order) {
+    showToast('Historical order not found', 'warning');
+    return;
+  }
+
+  // Check item availability in current catalog
+  const unavailableItems = [];
+  const availableItems = [];
+
+  order.items.forEach(it => {
+    const product = DB.menuItems.find(p => 
+      p.name.toLowerCase() === it.name.toLowerCase() ||
+      p.name.toLowerCase().includes(it.name.toLowerCase())
+    );
+
+    if (product && product.availability !== false) {
+      availableItems.push({ product, orderItem: it });
+    } else {
+      unavailableItems.push(it.name);
+    }
+  });
+
+  if (unavailableItems.length > 0) {
+    const proceed = confirm(
+      `Notice: The following item(s) from Order #${order.id} are currently unavailable:\n• ${unavailableItems.join('\n• ')}\n\nWould you like to reorder the remaining available items?`
+    );
+    if (!proceed) return;
+  }
+
+  window._lastCartUndoState = JSON.parse(JSON.stringify(AppState.cart.items));
+  let addedCount = 0;
+
+  availableItems.forEach(({ product, orderItem }) => {
+    addItemToCart(product, orderItem.customisations || [], `Reordered from #${order.id}`, orderItem.quantity || 1);
+    addedCount += (orderItem.quantity || 1);
+  });
+
+  AppState.cart.customer = targetCust;
+  renderCartUI();
+
+  showUndoToast(`${addedCount} items added from Order #${order.id}`, () => {
+    AppState.cart.items = window._lastCartUndoState || [];
+    renderCartUI();
+    showToast(`Order #${order.id} addition undone`, 'info');
+  });
+
+  // Pulse cart drawer on desktop
+  const cartDrawer = document.getElementById('cart-drawer');
+  if (cartDrawer) {
+    cartDrawer.classList.remove('cart-pulse');
+    void cartDrawer.offsetWidth;
+    cartDrawer.classList.add('cart-pulse');
+  }
+};
+
+window.reorderNamedCombo = function(comboName, customerId) {
+  const targetCust = customerId 
+    ? CustomerStore.customers.find(c => String(c.id) === String(customerId)) 
+    : AppState.activeCustomerProfile;
+  if (!targetCust) return;
+
+  const favData = CustomerStore.favouritesByCustomer[targetCust.id] || { savedCombos: [] };
+  const combo = favData.savedCombos.find(c => c.name === comboName);
+  if (!combo) return;
+
+  window._lastCartUndoState = JSON.parse(JSON.stringify(AppState.cart.items));
+  let addedCount = 0;
+
+  combo.items.forEach(ci => {
+    const product = DB.menuItems.find(p => p.name.toLowerCase().includes(ci.name.toLowerCase())) || DB.menuItems[0];
+    addItemToCart(product, ci.customisations || [], `From combo: ${combo.name}`, ci.quantity || 1);
+    addedCount += ci.quantity || 1;
+  });
+
+  AppState.cart.customer = targetCust;
+  renderCartUI();
+
+  showUndoToast(`${addedCount} items added from "${combo.name}"`, () => {
+    AppState.cart.items = window._lastCartUndoState || [];
+    renderCartUI();
+    showToast(`"${combo.name}" addition undone`, 'info');
+  });
+};
+
+window.saveActiveCartAsCustomerFavourite = function(customerId) {
+  const targetCust = customerId 
+    ? CustomerStore.customers.find(c => String(c.id) === String(customerId)) 
+    : AppState.activeCustomerProfile;
+  if (!targetCust) return;
+
+  if (!AppState.cart.items || AppState.cart.items.length === 0) {
+    showToast('Add items to current sale before saving as favourite combo', 'warning');
+    return;
+  }
+
+  const comboName = prompt('Enter a name for this Favourite Combo (e.g. My Morning Pick-Me-Up):', `${targetCust.first_name}'s Special`);
+  if (!comboName) return;
+
+  const total = AppState.cart.items.reduce((sum, it) => sum + (it.price * it.quantity), 0);
+  const itemsSummary = AppState.cart.items.map(it => `${it.quantity}× ${it.name}`).join(' + ');
+
+  if (!CustomerStore.favouritesByCustomer[targetCust.id]) {
+    CustomerStore.favouritesByCustomer[targetCust.id] = { frequentItems: [], savedCombos: [] };
+  }
+
+  CustomerStore.favouritesByCustomer[targetCust.id].savedCombos.unshift({
+    id: `combo_${Date.now()}`,
+    name: comboName,
+    desc: itemsSummary,
+    price: total,
+    items: JSON.parse(JSON.stringify(AppState.cart.items))
+  });
+
+  renderCustomerProfileTabContent();
+  showToast(`Saved "${comboName}" to ${targetCust.name}'s favourite combos!`, 'success');
+};
+
+window.addRecommendedItemToCart = function(itemName) {
+  const product = DB.menuItems.find(p => p.name.toLowerCase().includes(itemName.toLowerCase())) || DB.menuItems[0];
+  addItemToCart(product, [], '', 1);
+  renderCartUI();
+  showToast(`Added 1× ${product.name} to current sale`, 'success');
+};
+
+window.claimLoyaltyReward = function(rewardId, cost, rewardName) {
+  const cust = AppState.activeCustomerProfile || AppState.cart.customer;
+  if (!cust) return;
+
+  if ((cust.points || 0) < cost) {
+    showToast(`Insufficient points. Need ${cost} points.`, 'warning');
+    return;
+  }
+
+  cust.points -= cost;
+
+  // Add loyalty ledger entry
+  if (!CustomerStore.loyaltyByCustomer[cust.id]) CustomerStore.loyaltyByCustomer[cust.id] = [];
+  CustomerStore.loyaltyByCustomer[cust.id].unshift({
+    type: 'redeemed',
+    points: -cost,
+    desc: `Redeemed: ${rewardName}`,
+    date: 'Today'
+  });
+
+  if (rewardId === 'voucher10') {
+    AppState.cart.discountAmount = Math.max(AppState.cart.discountAmount || 0, 10.00);
+    AppState.cart.promoCode = 'VOUCHER10';
+  } else if (rewardId === 'coffee') {
+    const coffee = DB.menuItems.find(p => p.catId === '3' || p.name.includes('Flat White')) || DB.menuItems[0];
+    addItemToCart(coffee, [], 'Free Loyalty Coffee Perk', 1);
+  } else if (rewardId === 'pastry') {
+    const pastry = DB.menuItems.find(p => p.catId === '11' || p.name.includes('Croissant')) || DB.menuItems[0];
+    addItemToCart(pastry, [], 'Free Loyalty Pastry Perk', 1);
+  } else if (rewardId === 'breakfast') {
+    const bfast = DB.menuItems.find(p => p.catId === '8' || p.name.includes('Toastie')) || DB.menuItems[0];
+    addItemToCart(bfast, [], 'Complimentary Loyalty Breakfast', 1);
+  }
+
+  AppState.cart.customer = cust;
+  renderCartUI();
+  updateDrawerHeader(cust);
+  renderCustomerProfileTabContent();
+
+  showToast(`Successfully redeemed "${rewardName}"! Applied to order.`, 'success');
+};
+
+// Sale Attachment Actions
+window.attachCustomerToCurrentSale = function(custId) {
+  const cust = CustomerStore.customers.find(c => String(c.id) === String(custId));
+  if (cust) {
+    AppState.cart.customer = cust;
+    renderCartUI();
+    renderCustomerProfileTabContent();
+    showToast(`Attached ${cust.name} (${cust.tier}) to Current Sale!`, 'success');
+  }
+};
+
+window.detachCustomerFromCurrentSale = function() {
+  AppState.cart.customer = null;
+  renderCartUI();
+  if (AppState.activeCustomerProfile) {
+    renderCustomerProfileTabContent();
+  }
+  showToast('Detached customer from current sale', 'info');
+};
+
+// Interactive Toast Notification with Undo Action
+window.showUndoToast = function(message, onUndo, duration = 6500) {
+  let container = document.getElementById('app-toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'app-toast-container';
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'toast toast-success toast-with-undo';
+  toast.innerHTML = `
+    <div style="display:flex; align-items:center; gap:8px; flex:1;">
+      <i class="ri-check-line" style="font-size:18px; color:var(--color-success);"></i>
+      <span>${message}</span>
+    </div>
+    <button type="button" class="toast-undo-btn" id="toast-undo-action">
+      <i class="ri-arrow-go-back-line"></i> Undo
+    </button>
+  `;
+
+  const undoBtn = toast.querySelector('#toast-undo-action');
+  let isUndone = false;
+  undoBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    isUndone = true;
+    if (typeof onUndo === 'function') onUndo();
+    toast.style.animation = 'toastOut 0.25s forwards ease-in';
+    setTimeout(() => toast.remove(), 250);
+  });
+
+  container.appendChild(toast);
+
+  setTimeout(() => {
+    if (!isUndone && toast.parentNode) {
+      toast.style.animation = 'toastOut 0.25s forwards ease-in';
+      setTimeout(() => toast.remove(), 250);
+    }
+  }, duration);
+};
+
+// Legacy Compatibility Aliases
+function openCustomerModal() {
+  openCustomerProfileDrawer();
 }
 
 window.selectLoyaltyCustomer = function(custId) {
-  AppState.cart.customer = DB.customers.find(c => c.id === custId);
-  renderCartUI();
-  document.getElementById('customer-modal').classList.add('hidden');
+  const cust = CustomerStore.customers.find(c => String(c.id) === String(custId));
+  if (cust) {
+    AppState.cart.customer = cust;
+    renderCartUI();
+  }
+  closeCustomerProfileDrawer();
 };
 
 // ==========================================
@@ -6139,8 +8641,16 @@ function renderCustomersView(container) {
                   <td>${c.email}</td>
                   <td><strong style="color:var(--color-accent-gold);">${c.points} Pts</strong></td>
                   <td>${c.visits} Visits</td>
-                  <td>
-                    <button class="btn btn-outline btn-sm" onclick="addBonusPoints(${idx})">+100 Pts</button>
+                  <td style="white-space:nowrap;">
+                    <div style="display:flex; gap:6px; align-items:center;">
+                      <button class="btn btn-primary btn-xs" onclick="openCustomerProfileDrawer('${c.id || c.customer_id || idx + 1}'); switchCustomerProfileTab('profile'); openEditCustomerProfileModal('${c.id || c.customer_id || idx + 1}');" title="Edit Customer Profile">
+                        <i class="ri-edit-line"></i> Edit
+                      </button>
+                      <button class="btn btn-outline btn-xs" onclick="openCustomerProfileDrawer('${c.id || c.customer_id || idx + 1}');" title="View Customer Profile Drawer">
+                        <i class="ri-user-line"></i> View
+                      </button>
+                      <button class="btn btn-ghost btn-xs" onclick="addBonusPoints(${idx})" title="Add 100 Bonus Points">+100 Pts</button>
+                    </div>
                   </td>
                 </tr>
               `).join('')}

@@ -658,13 +658,13 @@ $csrfToken = getCSRFToken();
 
 
           <!-- User Profile -->
-          <div class="user-profile-badge" style="gap:8px;">
+          <div class="user-profile-badge" id="current-user-profile-badge" onclick="handleTopUserBadgeClick()" style="gap:8px; cursor:pointer;" title="Click to View & Edit Customer Profile">
             <div class="avatar" id="current-user-avatar" aria-label="User Avatar">SL</div>
             <div class="user-details">
               <span class="user-name" id="current-user-name">Sarah Lin</span>
               <span class="user-role-badge" id="current-user-role-badge">Lead Cashier</span>
             </div>
-            <button class="icon-btn-sm" id="lock-user-btn" onclick="logout()" title="Logout" aria-label="Logout" style="margin-left:4px;">
+            <button class="icon-btn-sm" id="lock-user-btn" onclick="event.stopPropagation(); logout();" title="Logout" aria-label="Logout" style="margin-left:4px;">
               <i class="ri-logout-box-r-line"></i>
             </button>
           </div>
@@ -721,13 +721,13 @@ $csrfToken = getCSRFToken();
           </div>
 
           <!-- Customer Tagging Bar -->
-          <div class="cart-customer-tag" id="cart-customer-tag-bar">
+          <div class="cart-customer-tag" id="cart-customer-tag-bar" onclick="openCustomerProfileDrawer()" style="cursor:pointer;" title="Click to view Customer Profile & Order History">
             <div class="customer-tag-info" id="cart-customer-info">
               <i class="ri-user-3-line"></i>
               <span>Walk-in Customer</span>
             </div>
-            <button class="btn btn-sm btn-ghost" id="attach-customer-btn">
-              <i class="ri-user-add-line"></i> Loyalty
+            <button class="btn btn-sm btn-ghost" id="attach-customer-btn" onclick="event.stopPropagation(); openCustomerProfileDrawer();" title="Search Customer & View Loyalty Profile">
+              <i class="ri-user-star-line"></i> Customer
             </button>
           </div>
 
@@ -794,6 +794,65 @@ $csrfToken = getCSRFToken();
             </button>
           </div>
         </aside>
+
+        <!-- Customer Profile & Order History Side Drawer -->
+        <aside class="customer-profile-drawer hidden" id="customer-profile-drawer" role="complementary" aria-label="Customer Profile and Order History">
+          <!-- Drawer Topbar -->
+          <div class="cp-drawer-header">
+            <div class="cp-header-title-group">
+              <div class="cp-drawer-title">
+                <i class="ri-user-star-line"></i>
+                <span id="cp-drawer-header-title">Customer Profile</span>
+              </div>
+              <span class="cp-badge" id="cp-header-tier-badge">Active</span>
+            </div>
+            <div class="cp-header-actions" style="display:flex; align-items:center; gap:6px;">
+              <button type="button" class="btn btn-primary btn-xs" id="cp-header-edit-btn" onclick="openEditCustomerProfileModal()" title="Edit Customer Details & Photo">
+                <i class="ri-edit-line"></i> Edit Profile
+              </button>
+              <button type="button" class="cp-close-btn" id="close-cp-drawer-btn" onclick="closeCustomerProfileDrawer()" aria-label="Close customer profile"><i class="ri-close-line"></i></button>
+            </div>
+          </div>
+
+          <!-- Instant Multi-Field Customer Search -->
+          <div class="cp-search-section">
+            <div class="cp-search-input-wrap">
+              <i class="ri-search-line cp-search-icon"></i>
+              <input type="text" id="cp-customer-search-input" placeholder="Search by Name, Phone, Email, ID..." autocomplete="off" aria-label="Search customer">
+              <button type="button" class="cp-search-clear hidden" id="cp-clear-search-btn" onclick="clearCustomerSearch()"><i class="ri-close-line"></i></button>
+            </div>
+            <!-- Live Search Results Dropdown -->
+            <div class="cp-search-dropdown hidden" id="cp-search-dropdown"></div>
+          </div>
+
+          <!-- Compact Customer Profile Tab Navigation -->
+          <div class="cp-tab-nav-bar" id="cp-tab-nav-bar">
+            <button type="button" class="cp-tab-btn active" data-tab="overview" onclick="switchCustomerProfileTab('overview')">
+              <i class="ri-dashboard-line"></i> <span>Overview</span>
+            </button>
+            <button type="button" class="cp-tab-btn" data-tab="orders" onclick="switchCustomerProfileTab('orders')">
+              <i class="ri-file-list-3-line"></i> <span>Orders</span>
+            </button>
+            <button type="button" class="cp-tab-btn" data-tab="receipts" onclick="switchCustomerProfileTab('receipts')">
+              <i class="ri-receipt-line"></i> <span>Receipts</span>
+            </button>
+            <button type="button" class="cp-tab-btn" data-tab="loyalty" onclick="switchCustomerProfileTab('loyalty')">
+              <i class="ri-vip-crown-line"></i> <span>Loyalty</span>
+            </button>
+            <button type="button" class="cp-tab-btn" data-tab="favourites" onclick="switchCustomerProfileTab('favourites')">
+              <i class="ri-heart-3-line"></i> <span>Favourites</span>
+            </button>
+            <button type="button" class="cp-tab-btn" data-tab="profile" onclick="switchCustomerProfileTab('profile')">
+              <i class="ri-user-settings-line"></i> <span>Profile</span>
+            </button>
+          </div>
+
+          <!-- Scrollable Body Content -->
+          <div class="cp-drawer-body" id="cp-drawer-body">
+            <!-- Dynamically populated by active tab renderer -->
+          </div>
+        </aside>
+        <div class="customer-drawer-backdrop hidden" id="customer-drawer-backdrop" onclick="closeCustomerProfileDrawer()"></div>
       </div>
 
   </div>
@@ -1435,6 +1494,218 @@ $csrfToken = getCSRFToken();
         <button class="btn btn-secondary" onclick="closePrintableReceiptModal()" style="flex:1; padding:10px; font-weight:bold; cursor:pointer;">Close</button>
         <button class="btn btn-primary" onclick="window.print()" style="flex:1; padding:10px; font-weight:bold; cursor:pointer; background:#22c55e; border:none; color:#fff; border-radius:8px;">
           <i class="ri-printer-line"></i> Print Receipt
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Customer Profile Modal -->
+  <div class="modal-backdrop hidden" id="edit-customer-profile-modal" role="dialog" aria-modal="true" aria-labelledby="edit-cp-modal-title">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3 id="edit-cp-modal-title"><i class="ri-user-settings-line text-primary"></i> Edit Customer Profile</h3>
+          <span class="modal-subtitle">Update contact information, preferences, and profile photo</span>
+        </div>
+        <button type="button" class="icon-btn modal-close" onclick="closeEditCustomerProfileModal()" aria-label="Close edit profile modal"><i class="ri-close-line"></i></button>
+      </div>
+
+      <form id="edit-customer-profile-form" onsubmit="saveCustomerProfile(event)">
+        <div class="modal-body" style="display:flex; flex-direction:column; gap:20px;">
+          <!-- Profile Photo Management Section -->
+          <div class="cp-photo-manager-card">
+            <div class="cp-photo-preview-wrap">
+              <div class="cp-avatar-lg" id="edit-cp-avatar-preview">
+                <span id="edit-cp-avatar-initials">DK</span>
+                <img id="edit-cp-avatar-img" class="hidden" src="" alt="Customer Photo">
+              </div>
+              <div class="cp-photo-controls">
+                <h4 style="margin:0 0 4px 0; font-size:14px; font-weight:700;">Customer Avatar & Photo</h4>
+                <p style="margin:0 0 10px 0; font-size:12px; color:var(--color-cream-muted);">Upload a photo, snap from counter camera, or use automatic initials.</p>
+                <div class="cp-photo-btn-group">
+                  <input type="file" id="edit-cp-photo-file-input" accept="image/*" class="hidden" onchange="handleProfilePhotoFileChange(event)">
+                  <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('edit-cp-photo-file-input').click()">
+                    <i class="ri-upload-2-line"></i> Upload Photo
+                  </button>
+                  <button type="button" class="btn btn-sm btn-outline" onclick="openCameraCaptureModal()">
+                    <i class="ri-camera-line"></i> Take Photo
+                  </button>
+                  <button type="button" class="btn btn-sm btn-ghost text-danger" id="remove-cp-photo-btn" onclick="removeCustomerProfilePhoto()">
+                    <i class="ri-delete-bin-line"></i> Remove
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Form Fields Grid -->
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+            <div class="form-group">
+              <label class="form-label">First Name *</label>
+              <input type="text" id="edit-cp-first-name" class="form-input" required placeholder="First name">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Last Name</label>
+              <input type="text" id="edit-cp-last-name" class="form-input" placeholder="Last name">
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+            <div class="form-group">
+              <label class="form-label">Phone Number *</label>
+              <input type="tel" id="edit-cp-phone" class="form-input" required placeholder="e.g. 0412 345 678">
+              <span class="field-help" id="edit-cp-phone-error" style="color:#ef4444; font-size:11px; display:none;">Please enter a valid phone number.</span>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Email Address *</label>
+              <input type="email" id="edit-cp-email" class="form-input" required placeholder="e.g. customer@example.com">
+              <span class="field-help" id="edit-cp-email-error" style="color:#ef4444; font-size:11px; display:none;">Please enter a valid email address.</span>
+            </div>
+          </div>
+
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+            <div class="form-group">
+              <label class="form-label">Date of Birth <span style="color:var(--color-cream-muted); font-weight:normal;">(Optional)</span></label>
+              <input type="date" id="edit-cp-dob" class="form-input">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Street Address <span style="color:var(--color-cream-muted); font-weight:normal;">(Optional)</span></label>
+              <input type="text" id="edit-cp-address" class="form-input" placeholder="Street, suburb, postcode">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Preferences & Dietary Tags <span style="color:var(--color-cream-muted); font-weight:normal;">(Comma separated)</span></label>
+            <input type="text" id="edit-cp-tags" class="form-input" placeholder="e.g. VIP, Prefers Oat Milk, Extra Hot, No Sugar">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Barista & Staff Operational Notes</label>
+            <textarea id="edit-cp-notes" class="form-input" rows="2" placeholder="e.g. Always likes extra hot flat white. Preferred table 4. Friendly weekday regular."></textarea>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="closeEditCustomerProfileModal()">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="save-cp-btn">
+            <i class="ri-check-line"></i> Save Profile Changes
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Camera Capture Modal -->
+  <div class="modal-backdrop hidden" id="camera-capture-modal" role="dialog" aria-modal="true">
+    <div class="modal-card modal-sm">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3><i class="ri-camera-lens-line text-primary"></i> Take Profile Photo</h3>
+          <span class="modal-subtitle">Position customer in front of counter camera</span>
+        </div>
+        <button type="button" class="icon-btn modal-close" onclick="closeCameraCaptureModal()"><i class="ri-close-line"></i></button>
+      </div>
+      <div class="modal-body" style="display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center;">
+        <div class="camera-viewfinder-wrap">
+          <video id="camera-video-feed" autoplay playsinline style="width:100%; height:260px; object-fit:cover; border-radius:12px; background:#000;"></video>
+          <canvas id="camera-snapshot-canvas" class="hidden" style="width:100%; height:260px; object-fit:cover; border-radius:12px;"></canvas>
+        </div>
+        <p id="camera-status-msg" style="font-size:12px; color:var(--color-cream-muted); margin:0;">Ensure good lighting and click Capture.</p>
+      </div>
+      <div class="modal-footer" style="justify-content:center; gap:10px;">
+        <button type="button" class="btn btn-secondary" id="camera-cancel-btn" onclick="closeCameraCaptureModal()">Cancel</button>
+        <button type="button" class="btn btn-primary" id="camera-snap-btn" onclick="captureCameraSnapshot()">
+          <i class="ri-camera-fill"></i> Capture Photo
+        </button>
+        <button type="button" class="btn btn-outline hidden" id="camera-retake-btn" onclick="retakeCameraSnapshot()">
+          <i class="ri-refresh-line"></i> Retake
+        </button>
+        <button type="button" class="btn btn-success hidden" id="camera-use-btn" onclick="useCameraSnapshot()">
+          <i class="ri-check-double-line"></i> Use This Photo
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Customer Digital Receipt Modal -->
+  <div class="modal-backdrop hidden" id="customer-receipt-modal" role="dialog" aria-modal="true" aria-labelledby="cust-receipt-modal-title">
+    <div class="modal-card" style="max-width:440px;">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <h3 id="cust-receipt-modal-title"><i class="ri-receipt-line text-primary"></i> Customer Receipt</h3>
+          <span class="modal-subtitle" id="cust-receipt-modal-subtitle">Receipt #R9051 • Order #9051</span>
+        </div>
+        <button type="button" class="icon-btn modal-close" onclick="closeCustomerReceiptModal()"><i class="ri-close-line"></i></button>
+      </div>
+
+      <div class="modal-body" style="padding:16px;">
+        <!-- Digital Thermal Paper Receipt Card -->
+        <div class="digital-receipt-paper" id="digital-receipt-paper-content">
+          <div class="dr-header">
+            <div class="dr-brand-title">RAVENHILL COFFEE</div>
+            <div class="dr-brand-tagline">Specialty Coffee Roasters & Kitchen</div>
+            <div class="dr-brand-info">Prahran Market • Melbourne VIC</div>
+            <div class="dr-brand-info">ABN: 84 109 238 901 • Ph: (03) 9510 2030</div>
+          </div>
+
+          <div class="dr-divider-dashed"></div>
+
+          <div class="dr-meta-grid">
+            <div><strong>Receipt:</strong> <span id="dr-receipt-num">#R9051</span></div>
+            <div><strong>Order:</strong> <span id="dr-order-num">#9051</span></div>
+            <div><strong>Date:</strong> <span id="dr-date">12 Sep 2026, 10:35 AM</span></div>
+            <div><strong>Customer:</strong> <span id="dr-customer-name">David Kim</span></div>
+            <div><strong>Channel:</strong> <span id="dr-channel">Dine In (Table 04)</span></div>
+            <div><strong>Customer ID:</strong> <span id="dr-customer-id">#CUST-0001</span></div>
+          </div>
+
+          <div class="dr-divider-dashed"></div>
+
+          <table class="dr-items-table">
+            <thead>
+              <tr>
+                <th style="text-align:left;">Item</th>
+                <th style="text-align:center; width:40px;">Qty</th>
+                <th style="text-align:right; width:65px;">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="dr-items-tbody">
+              <!-- Line items injected via JS -->
+            </tbody>
+          </table>
+
+          <div class="dr-divider-dashed"></div>
+
+          <div class="dr-totals-block">
+            <div class="dr-total-row"><span>Subtotal</span><span id="dr-subtotal">$16.82</span></div>
+            <div class="dr-total-row"><span>GST (10% included)</span><span id="dr-tax">$1.68</span></div>
+            <div class="dr-total-row" id="dr-discount-row"><span>Discount / Reward</span><span id="dr-discount">-$0.00</span></div>
+            <div class="dr-total-row grand-total"><span>TOTAL PAID</span><span id="dr-total">$18.50</span></div>
+            <div class="dr-total-row payment-line"><span>Payment Method</span><strong id="dr-payment-method">EFTPOS (Visa ****4242)</strong></div>
+          </div>
+
+          <div class="dr-divider-dashed"></div>
+
+          <div class="dr-footer">
+            <div class="dr-loyalty-earned" id="dr-loyalty-earned-line"><i class="ri-vip-crown-fill text-gold"></i> +18 Loyalty Points Earned</div>
+            <div style="font-weight:700; margin-top:6px;">Thank you for visiting Ravenhill Coffee!</div>
+            <div style="color:#666; font-size:11px; margin-top:2px;">Visit again or order ahead at ravenhill.au</div>
+            <div class="dr-email-delivery-tag" id="dr-email-delivery-tag" style="margin-top:8px; font-size:11px; color:#2563eb; background:#eff6ff; padding:4px 8px; border-radius:6px;">
+              <i class="ri-mail-check-line"></i> Emailed to: <strong id="dr-destination-email">david.kim@gmail.com</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="printCustomerDigitalReceipt()">
+          <i class="ri-printer-line"></i> Print
+        </button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="sendCustomerDigitalReceiptEmail()">
+          <i class="ri-mail-send-line"></i> Send Email
+        </button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="downloadCustomerDigitalReceipt()">
+          <i class="ri-download-2-line"></i> Download
         </button>
       </div>
     </div>

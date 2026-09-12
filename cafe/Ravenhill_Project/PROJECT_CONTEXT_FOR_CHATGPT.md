@@ -32,9 +32,7 @@ Ravenhill_Project/
 ├── app.js                         # Core client application logic, state, cart, customiser, POS, events
 ├── styles.css                     # Complete design system tokens, responsive styles & animations
 ├── deploy.py                      # Automated SFTP deployment script
-├── phpmyadmin_import.sql          # Clean phpMyAdmin database import script
-├── ravenhill_database.sql         # Full SQL database backup
-├── schema.sql                     # Production DDL and seed data
+├── schema.sql                     # Primary production DDL, database tables & seed data
 └── api/                           # Backend RESTful API endpoints
     ├── config/
     │   ├── db.php                 # Resilient PDO connection handler (production 127.0.0.1 / local XAMPP)
@@ -141,7 +139,7 @@ Ravenhill_Project/
 
 ---
 
-## 5. Primary Database Tables (`schema.sql` / `phpmyadmin_import.sql`)
+## 5. Primary Database Tables (`schema.sql`)
 
 ### 1. `Customisations`
 ```sql
